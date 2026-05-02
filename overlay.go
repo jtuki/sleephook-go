@@ -32,6 +32,7 @@ const (
 	WM_TIMER   = 0x0113
 	WM_CLOSE   = 0x0010
 	WM_DESTROY = 0x0002
+	WM_COMMAND = 0x0111
 	WM_QUIT    = 0x0012
 
 	GENERIC_READ  = 0x80000000
@@ -151,7 +152,17 @@ func overlayWndProc(hwnd uintptr, msg uint32, wparam uintptr, lparam uintptr) ui
 		checkAndToggle()
 		return 0
 	case WM_CLOSE:
-		return 0 // block closing
+		return 0
+	case WM_COMMAND:
+		if wparam == 1 { // tray menu: exit
+			pPostQuitMessage.Call(0)
+			return 0
+		}
+	case WM_TRAYICON:
+		if lparam == WM_RBUTTONUP {
+			showTrayMenu(hwnd)
+		}
+		return 0
 	case WM_DESTROY:
 		pPostQuitMessage.Call(0)
 		return 0

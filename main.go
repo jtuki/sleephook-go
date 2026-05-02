@@ -33,7 +33,9 @@ func main() {
 		return
 	}
 
+	addTrayIcon(gHwnd)
 	pSetTimer.Call(gHwnd, 1, 1000, 0)
+	defer removeTrayIcon(gHwnd)
 	defer pKillTimer.Call(gHwnd, 1)
 	defer gHooks.uninstall()
 	defer gBlocker.unblock()
@@ -71,10 +73,12 @@ func checkAndToggle() {
 		showOverlay(gHwnd)
 		gBlocker.block()
 		gLocked = true
+		updateTrayTooltip(gHwnd, "SleepHook - 锁定中")
 	} else if !wantLock && gLocked {
 		gHooks.uninstall()
 		hideOverlay(gHwnd)
 		gBlocker.unblock()
 		gLocked = false
+		updateTrayTooltip(gHwnd, "SleepHook - 运行中")
 	}
 }
