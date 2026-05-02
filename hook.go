@@ -71,14 +71,18 @@ func (h *hookManager) install() error {
 
 	kbHook, _, err := pSetWindowsHookExW.Call(WH_KEYBOARD_LL, h.kbCB, 0, 0)
 	if kbHook == 0 {
+		logMsg("ERROR: SetWindowsHookEx KEYBOARD failed: %v", err)
 		return fmt.Errorf("keyboard hook: %w", err)
 	}
+	logMsg("keyboard hook installed: 0x%X", kbHook)
 
 	msHook, _, err := pSetWindowsHookExW.Call(WH_MOUSE_LL, h.msCB, 0, 0)
 	if msHook == 0 {
 		pUnhookWindowsHookEx.Call(kbHook)
+		logMsg("ERROR: SetWindowsHookEx MOUSE failed: %v", err)
 		return fmt.Errorf("mouse hook: %w", err)
 	}
+	logMsg("mouse hook installed: 0x%X", msHook)
 
 	h.kbHook = kbHook
 	h.msHook = msHook
@@ -101,4 +105,5 @@ func (h *hookManager) uninstall() {
 		h.msHook = 0
 	}
 	h.active = false
+	logMsg("hooks removed")
 }

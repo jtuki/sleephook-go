@@ -100,9 +100,12 @@ var overlayWndProcCB uintptr
 
 func createOverlayWindow() uintptr {
 	hInst, _, _ := pGetModuleHandleW.Call(0)
+	logMsg("GetModuleHandle: hInst=0x%X", hInst)
+
 	className, _ := syscall.UTF16PtrFromString("SleepHookOverlay")
 	cursor, _, _ := pLoadCursorW.Call(0, IDC_ARROW)
 	brush, _, _ := pCreateSolidBrush.Call(0) // black
+	logMsg("cursor=0x%X brush=0x%X", cursor, brush)
 
 	overlayWndProcCB = syscall.NewCallback(overlayWndProc)
 
@@ -114,21 +117,22 @@ func createOverlayWindow() uintptr {
 		HbrBackground: brush,
 		LpszClassName: className,
 	}
-	pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	atom, _, err := pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	logMsg("RegisterClassEx: atom=%d err=%v", atom, err)
 
-	// Cover all monitors (virtual screen)
 	x, _, _ := pGetSystemMetrics.Call(SM_XVIRTUALSCREEN)
 	y, _, _ := pGetSystemMetrics.Call(SM_YVIRTUALSCREEN)
 	cx, _, _ := pGetSystemMetrics.Call(SM_CXVIRTUALSCREEN)
 	cy, _, _ := pGetSystemMetrics.Call(SM_CYVIRTUALSCREEN)
+	logMsg("virtual screen: x=%d y=%d cx=%d cy=%d", x, y, cx, cy)
 
 	if cx == 0 || cy == 0 {
-		// fallback to primary screen
 		cx, _, _ = pGetSystemMetrics.Call(SM_CXSCREEN)
 		cy, _, _ = pGetSystemMetrics.Call(SM_CYSCREEN)
+		logMsg("fallback primary screen: cx=%d cy=%d", cx, cy)
 	}
 
-	hwnd, _, _ := pCreateWindowExW.Call(
+	hwnd, _, err := pCreateWindowExW.Call(
 		WS_EX_TOPMOST|WS_EX_LAYERED|WS_EX_TOOLWINDOW,
 		uintptr(unsafe.Pointer(className)),
 		uintptr(unsafe.Pointer(className)),
@@ -137,12 +141,14 @@ func createOverlayWindow() uintptr {
 		0, 0, hInst, 0,
 	)
 	if hwnd == 0 {
+		logMsg("FATAL: CreateWindowEx failed: %v", err)
 		showError("Failed to create overlay window")
 		return 0
 	}
 
-	// 50% transparency
-	pSetLayeredWindowAttributes.Call(hwnd, 0, 128, LWA_ALPHA)
+	ret, _, err := pSetLayeredWindowAttributes.Call(hwnd, 0, 128, LWA_ALPHA)
+	logMsg("SetLayeredWindowAttributes: ret=%d err=%v", ret, err)
+
 	return hwnd
 }
 
@@ -154,7 +160,8 @@ func overlayWndProc(hwnd uintptr, msg uint32, wparam uintptr, lparam uintptr) ui
 	case WM_CLOSE:
 		return 0
 	case WM_COMMAND:
-		if wparam == 1 { // tray menu: exit
+		if wparam == 1 {
+			logMsg("tray menu: exit selected")
 			pPostQuitMessage.Call(0)
 			return 0
 		}
@@ -172,7 +179,7 @@ func overlayWndProc(hwnd uintptr, msg uint32, wparam uintptr, lparam uintptr) ui
 }
 
 func showOverlay(hwnd uintptr) {
-	hwndTopmost := ^uintptr(0) // HWND_TOPMOST = (HWND)-1
+	hwndTopmost := ^uintptr(0)
 	pSetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0,
 		uintptr(SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW))
 	pShowWindow.Call(hwnd, SW_SHOW)

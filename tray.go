@@ -16,8 +16,8 @@ const (
 
 	IDI_APPLICATION = 32512
 
-	WM_TRAYICON    = 0x0401 // WM_USER + 1
-	WM_RBUTTONUP   = 0x0205
+	WM_TRAYICON  = 0x0401 // WM_USER + 1
+	WM_RBUTTONUP = 0x0205
 
 	MF_STRING    = 0x00000000
 	TPM_LEFTALIGN = 0x0000
@@ -44,18 +44,19 @@ type NOTIFYICONDATAW struct {
 var (
 	shell32 = syscall.NewLazyDLL("shell32.dll")
 
-	pShellNotifyIconW   = shell32.NewProc("Shell_NotifyIconW")
-	pLoadIconW          = user32.NewProc("LoadIconW")
-	pCreatePopupMenu    = user32.NewProc("CreatePopupMenu")
-	pAppendMenuW        = user32.NewProc("AppendMenuW")
-	pTrackPopupMenu     = user32.NewProc("TrackPopupMenu")
-	pDestroyMenu        = user32.NewProc("DestroyMenu")
-	pGetCursorPos       = user32.NewProc("GetCursorPos")
+	pShellNotifyIconW    = shell32.NewProc("Shell_NotifyIconW")
+	pLoadIconW           = user32.NewProc("LoadIconW")
+	pCreatePopupMenu     = user32.NewProc("CreatePopupMenu")
+	pAppendMenuW         = user32.NewProc("AppendMenuW")
+	pTrackPopupMenu      = user32.NewProc("TrackPopupMenu")
+	pDestroyMenu         = user32.NewProc("DestroyMenu")
+	pGetCursorPos        = user32.NewProc("GetCursorPos")
 	pSetForegroundWindow = user32.NewProc("SetForegroundWindow")
 )
 
 func addTrayIcon(hwnd uintptr) {
-	icon, _, _ := pLoadIconW.Call(0, IDI_APPLICATION)
+	icon, _, err := pLoadIconW.Call(0, IDI_APPLICATION)
+	logMsg("LoadIcon: icon=0x%X err=%v", icon, err)
 
 	var nid NOTIFYICONDATAW
 	nid.CbSize = uint32(unsafe.Sizeof(nid))
@@ -66,7 +67,8 @@ func addTrayIcon(hwnd uintptr) {
 	nid.HIcon = icon
 	copyTip(&nid.SzTip, "SleepHook - 运行中")
 
-	pShellNotifyIconW.Call(NIM_ADD, uintptr(unsafe.Pointer(&nid)))
+	ret, _, err := pShellNotifyIconW.Call(NIM_ADD, uintptr(unsafe.Pointer(&nid)))
+	logMsg("Shell_NotifyIcon ADD: ret=%d err=%v", ret, err)
 }
 
 func removeTrayIcon(hwnd uintptr) {
