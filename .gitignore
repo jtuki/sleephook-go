@@ -5,6 +5,9 @@
 *.so
 *.dylib
 
+# Build output
+builds/
+
 # Test / coverage
 *.test
 *.out
