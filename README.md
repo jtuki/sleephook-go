@@ -23,6 +23,7 @@ Go 重写版，单 exe 部署，零外部依赖。原版 [SleepHook](https://git
 ```yaml
 message: "不熬夜！早点休息！"
 speed: 2
+opacity: 240
 lock_periods:
   - start: "00:40"
     end:   "07:00"
@@ -34,6 +35,7 @@ lock_periods:
 |------|------|
 | `message` | 锁屏显示文字（可选，有默认值） |
 | `speed` | 文字移动速度 1-10（可选，默认 2） |
+| `opacity` | 遮罩透明度 1-255（可选，默认 240，越小越透明） |
 | `lock_periods` | 锁定时段列表，`start`/`end` 格式 `hh:mm` 或 `hh:mm:ss`，支持跨午夜 |
 
 跨午夜时段（如 `23:50` → `00:20`）总时长不得超过 1 小时。

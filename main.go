@@ -16,6 +16,7 @@ var (
 	gLocked     bool
 	gLastReload time.Time
 	gSpeedVal   int
+	gOpacityVal int
 )
 
 func main() {
@@ -31,7 +32,7 @@ func main() {
 	logMsg("config path: %s", cfgPath)
 
 	var err error
-	gCfg, gMessage, gSpeedVal, err = loadConfig(cfgPath)
+	gCfg, gMessage, gSpeedVal, gOpacityVal, err = loadConfig(cfgPath)
 	if err != nil {
 		logMsg("FATAL: loadConfig: %v", err)
 		showError(err.Error())
@@ -48,7 +49,7 @@ func main() {
 			tr.StopSec/3600, tr.StopSec%3600/60,
 			kind, hours)
 	}
-	logMsg("message: %s speed: %d", gMessage, gSpeedVal)
+	logMsg("message: %s speed: %d opacity: %d", gMessage, gSpeedVal, gOpacityVal)
 	gLastReload = time.Now()
 
 	gHooks = newHookManager()
@@ -92,12 +93,14 @@ func checkAndToggle() {
 	now := time.Now()
 
 	if now.Sub(gLastReload) >= 60*time.Second {
-		if cfg, msg, speed, err := loadConfig(configPath()); err == nil && len(cfg) > 0 {
+		if cfg, msg, speed, opacity, err := loadConfig(configPath()); err == nil && len(cfg) > 0 {
 			gCfg = cfg
 			gMessage = msg
 			gSpeedVal = speed
 			gSpeed = int32(speed)
-			logMsg("config reloaded: %d periods, message=%q speed=%d", len(gCfg), gMessage, speed)
+			gOpacityVal = opacity
+			gOpacity = byte(opacity)
+			logMsg("config reloaded: %d periods, message=%q speed=%d opacity=%d", len(gCfg), gMessage, speed, opacity)
 		} else if err != nil {
 			logMsg("config reload failed: %v", err)
 		}
@@ -112,6 +115,7 @@ func checkAndToggle() {
 			logMsg("ERROR: hook install: %v", err)
 		}
 		gSpeed = int32(gSpeedVal)
+		gOpacity = byte(gOpacityVal)
 		gTextMeasured = false
 		showOverlay(gHwnd)
 		pSetTimer.Call(gHwnd, 2, 50, 0)

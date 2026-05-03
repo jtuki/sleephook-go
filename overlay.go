@@ -157,6 +157,7 @@ var (
 	gTextX, gTextY   int32
 	gTextDX, gTextDY int32
 	gSpeed           int32 = 2
+	gOpacity         byte  = 240
 	gTextW, gTextH   int32
 	gScreenW, gScreenH int32
 	gTextMeasured    bool
@@ -237,7 +238,7 @@ func createOverlayWindows() uintptr {
 			continue
 		}
 
-		pSetLayeredWindowAttributes.Call(hwnd, 0, 255, LWA_ALPHA)
+		pSetLayeredWindowAttributes.Call(hwnd, 0, uintptr(gOpacity), LWA_ALPHA)
 		gOverlays = append(gOverlays, hwnd)
 		logMsg("overlay[%d] hwnd=0x%X", i, hwnd)
 
@@ -280,7 +281,7 @@ func createFallbackWindow(hInst uintptr, className *uint16) uintptr {
 		showError("Failed to create overlay window")
 		return 0
 	}
-	pSetLayeredWindowAttributes.Call(hwnd, 0, 255, LWA_ALPHA)
+	pSetLayeredWindowAttributes.Call(hwnd, 0, uintptr(gOpacity), LWA_ALPHA)
 	gOverlays = append(gOverlays, hwnd)
 	return hwnd
 }
