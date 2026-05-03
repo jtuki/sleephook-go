@@ -173,6 +173,16 @@ func showTrayMenu(hwnd uintptr) {
 	sep, _ := syscall.UTF16PtrFromString("-")
 	pAppendMenuW.Call(menu, MF_SEPARATOR, 0, uintptr(unsafe.Pointer(sep)))
 
+	autoFlags := uint32(MF_STRING)
+	if isAutoStartEnabled() {
+		autoFlags |= MF_CHECKED
+	}
+	auto, _ := syscall.UTF16PtrFromString("开机启动")
+	pAppendMenuW.Call(menu, uintptr(autoFlags), 3, uintptr(unsafe.Pointer(auto)))
+
+	sep2, _ := syscall.UTF16PtrFromString("-")
+	pAppendMenuW.Call(menu, MF_SEPARATOR, 0, uintptr(unsafe.Pointer(sep2)))
+
 	quit, _ := syscall.UTF16PtrFromString("退出 SleepHook")
 	pAppendMenuW.Call(menu, MF_STRING, 1, uintptr(unsafe.Pointer(quit)))
 

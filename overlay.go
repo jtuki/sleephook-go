@@ -314,6 +314,9 @@ func overlayWndProc(hwnd uintptr, msg uint32, wparam uintptr, lparam uintptr) ui
 		} else if wparam == 2 {
 			extendLock(10 * time.Minute)
 			return 0
+		} else if wparam == 3 {
+			toggleAutoStart()
+			return 0
 		}
 	case WM_TRAYICON:
 		if lparam == WM_RBUTTONUP {
