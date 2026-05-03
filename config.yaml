@@ -4,6 +4,9 @@
 # Message displayed on the lock screen (optional, has default)
 message: "不熬夜！早点休息！"
 
+# Text animation speed in pixels per frame (default: 2, range: 1-10)
+speed: 2
+
 # lock_periods: list of time ranges to lock the screen.
 #   start / end: "hh:mm" or "hh:mm:ss" format (24-hour).
 #   Overnight ranges (start > end) must not exceed 1 hour.

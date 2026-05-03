@@ -15,6 +15,7 @@ var (
 	gHwnd       uintptr
 	gLocked     bool
 	gLastReload time.Time
+	gSpeedVal   int
 )
 
 func main() {
@@ -30,7 +31,7 @@ func main() {
 	logMsg("config path: %s", cfgPath)
 
 	var err error
-	gCfg, gMessage, err = loadConfig(cfgPath)
+	gCfg, gMessage, gSpeedVal, err = loadConfig(cfgPath)
 	if err != nil {
 		logMsg("FATAL: loadConfig: %v", err)
 		showError(err.Error())
@@ -47,16 +48,16 @@ func main() {
 			tr.StopSec/3600, tr.StopSec%3600/60,
 			kind, hours)
 	}
-	logMsg("message: %s", gMessage)
+	logMsg("message: %s speed: %d", gMessage, gSpeedVal)
 	gLastReload = time.Now()
 
 	gHooks = newHookManager()
 	gBlocker = newBlocker()
 
-	logMsg("calling createOverlayWindow...")
-	gHwnd = createOverlayWindow()
+	logMsg("calling createOverlayWindows...")
+	gHwnd = createOverlayWindows()
 	if gHwnd == 0 {
-		logMsg("FATAL: createOverlayWindow returned 0")
+		logMsg("FATAL: createOverlayWindows returned 0")
 		return
 	}
 	logMsg("overlay window OK: hwnd=0x%X", gHwnd)
@@ -91,10 +92,12 @@ func checkAndToggle() {
 	now := time.Now()
 
 	if now.Sub(gLastReload) >= 60*time.Second {
-		if cfg, msg, err := loadConfig(configPath()); err == nil && len(cfg) > 0 {
+		if cfg, msg, speed, err := loadConfig(configPath()); err == nil && len(cfg) > 0 {
 			gCfg = cfg
 			gMessage = msg
-			logMsg("config reloaded: %d periods, message=%q", len(gCfg), gMessage)
+			gSpeedVal = speed
+			gSpeed = int32(speed)
+			logMsg("config reloaded: %d periods, message=%q speed=%d", len(gCfg), gMessage, speed)
 		} else if err != nil {
 			logMsg("config reload failed: %v", err)
 		}
@@ -108,12 +111,16 @@ func checkAndToggle() {
 		if err := gHooks.install(); err != nil {
 			logMsg("ERROR: hook install: %v", err)
 		}
+		gSpeed = int32(gSpeedVal)
+		gTextMeasured = false
 		showOverlay(gHwnd)
+		pSetTimer.Call(gHwnd, 2, 50, 0)
 		gBlocker.block()
 		gLocked = true
 		updateTrayTooltip(gHwnd, "SleepHook - 锁定中")
 	} else if !wantLock && gLocked {
 		logMsg("<<< UNLOCKING at %s", now.Format("15:04:05"))
+		pKillTimer.Call(gHwnd, 2)
 		gHooks.uninstall()
 		hideOverlay(gHwnd)
 		gBlocker.unblock()

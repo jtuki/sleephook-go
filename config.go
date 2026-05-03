@@ -11,6 +11,7 @@ import (
 
 type configFile struct {
 	Message     string       `yaml:"message"`
+	Speed       int          `yaml:"speed"`
 	LockPeriods []lockPeriod `yaml:"lock_periods"`
 }
 
@@ -25,19 +26,19 @@ type TimeRange struct {
 	StopSec  int
 }
 
-func loadConfig(path string) ([]TimeRange, string, error) {
+func loadConfig(path string) ([]TimeRange, string, int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, "", fmt.Errorf("read config: %w", err)
+		return nil, "", 0, fmt.Errorf("read config: %w", err)
 	}
 
 	var cfg configFile
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, "", fmt.Errorf("parse config: %w", err)
+		return nil, "", 0, fmt.Errorf("parse config: %w", err)
 	}
 
 	if len(cfg.LockPeriods) == 0 {
-		return nil, "", fmt.Errorf("no lock_periods configured")
+		return nil, "", 0, fmt.Errorf("no lock_periods configured")
 	}
 
 	msg := cfg.Message
@@ -49,24 +50,28 @@ func loadConfig(path string) ([]TimeRange, string, error) {
 	for i, p := range cfg.LockPeriods {
 		start, err := parseTimeOfDay(p.Start)
 		if err != nil {
-			return nil, "", fmt.Errorf("lock_periods[%d].start: %w", i, err)
+			return nil, "", 0, fmt.Errorf("lock_periods[%d].start: %w", i, err)
 		}
 		stop, err := parseTimeOfDay(p.End)
 		if err != nil {
-			return nil, "", fmt.Errorf("lock_periods[%d].end: %w", i, err)
+			return nil, "", 0, fmt.Errorf("lock_periods[%d].end: %w", i, err)
 		}
 		// Overnight ranges must not exceed 1 hour
 		if start > stop {
 			duration := (86400 - start + stop)
 			if duration > 3600 {
-				return nil, "", fmt.Errorf(
+				return nil, "", 0, fmt.Errorf(
 					"lock_periods[%d] %s-%s: overnight range is %d min, max is 60 min",
 					i, p.Start, p.End, duration/60)
 			}
 		}
 		ranges = append(ranges, TimeRange{start, stop})
 	}
-	return ranges, msg, nil
+	speed := cfg.Speed
+	if speed < 1 {
+		speed = 2
+	}
+	return ranges, msg, speed, nil
 }
 
 func parseTimeOfDay(s string) (int, error) {

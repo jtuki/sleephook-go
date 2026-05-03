@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/rand"
 	"syscall"
 	"unsafe"
 )
@@ -39,15 +40,17 @@ const (
 	GENERIC_READ  = 0x80000000
 	OPEN_EXISTING = 3
 
+	MONITORINFOF_PRIMARY = 0x00000001
+
 	// GDI text drawing
-	TRANSPARENT      = 1
-	DT_CENTER        = 0x00000001
-	DT_VCENTER       = 0x00000004
-	DT_SINGLELINE    = 0x00000020
-	DEFAULT_CHARSET  = 1
-	FW_BOLD          = 700
+	TRANSPARENT       = 1
+	DT_LEFT           = 0x00000000
+	DT_TOP            = 0x00000000
+	DT_SINGLELINE     = 0x00000020
+	DEFAULT_CHARSET   = 1
+	FW_BOLD           = 700
 	CLEARTYPE_QUALITY = 5
-	DEFAULT_PITCH    = 0
+	DEFAULT_PITCH     = 0
 )
 
 type WNDCLASSEX struct {
@@ -79,6 +82,10 @@ type RECT struct {
 	Left, Top, Right, Bottom int32
 }
 
+type SIZE struct {
+	CX, CY int32
+}
+
 type PAINTSTRUCT struct {
 	Hdc         uintptr
 	FErase      int32
@@ -86,6 +93,13 @@ type PAINTSTRUCT struct {
 	FRestore    int32
 	FIncUpdate  int32
 	RgbReserved [32]byte
+}
+
+type MONITORINFO struct {
+	Size   uint32
+	Rect   RECT
+	RcWork RECT
+	Flags  uint32
 }
 
 var (
@@ -118,7 +132,6 @@ var (
 	pCreateFileW      = kernel32.NewProc("CreateFileW")
 	pCloseHandle      = kernel32.NewProc("CloseHandle")
 
-	// GDI text drawing
 	pBeginPaint    = user32.NewProc("BeginPaint")
 	pEndPaint      = user32.NewProc("EndPaint")
 	pGetClientRect = user32.NewProc("GetClientRect")
@@ -129,17 +142,53 @@ var (
 	pSelectObject  = gdi32.NewProc("SelectObject")
 	pDeleteObject  = gdi32.NewProc("DeleteObject")
 	pUpdateWindow  = user32.NewProc("UpdateWindow")
+
+	pGetTextExtentPoint32W = gdi32.NewProc("GetTextExtentPoint32W")
+	pInvalidateRect        = user32.NewProc("InvalidateRect")
+	pFillRect              = user32.NewProc("FillRect")
+
+	pEnumDisplayMonitors = user32.NewProc("EnumDisplayMonitors")
+	pGetMonitorInfoW     = user32.NewProc("GetMonitorInfoW")
 )
 
 var overlayWndProcCB uintptr
 
-func createOverlayWindow() uintptr {
+var (
+	gTextX, gTextY   int32
+	gTextDX, gTextDY int32
+	gSpeed           int32 = 2
+	gTextW, gTextH   int32
+	gScreenW, gScreenH int32
+	gTextMeasured    bool
+)
+
+// Per-monitor overlay windows
+var gOverlays []uintptr
+
+// Collected during EnumDisplayMonitors callback
+var gEnumMonitors []struct {
+	Rect     RECT
+	Primary  bool
+}
+
+func monitorEnumProc(hMonitor uintptr, hdc uintptr, lprc uintptr, lParam uintptr) uintptr {
+	var mi MONITORINFO
+	mi.Size = uint32(unsafe.Sizeof(mi))
+	pGetMonitorInfoW.Call(hMonitor, uintptr(unsafe.Pointer(&mi)))
+	gEnumMonitors = append(gEnumMonitors, struct {
+		Rect    RECT
+		Primary bool
+	}{mi.Rect, mi.Flags&MONITORINFOF_PRIMARY != 0})
+	return 1
+}
+
+func createOverlayWindows() uintptr {
 	hInst, _, _ := pGetModuleHandleW.Call(0)
 	logMsg("GetModuleHandle: hInst=0x%X", hInst)
 
 	className, _ := syscall.UTF16PtrFromString("SleepHookOverlay")
 	cursor, _, _ := pLoadCursorW.Call(0, IDC_ARROW)
-	brush, _, _ := pCreateSolidBrush.Call(0) // black
+	brush, _, _ := pCreateSolidBrush.Call(0)
 	logMsg("cursor=0x%X brush=0x%X", cursor, brush)
 
 	overlayWndProcCB = syscall.NewCallback(overlayWndProc)
@@ -155,16 +204,67 @@ func createOverlayWindow() uintptr {
 	atom, _, err := pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 	logMsg("RegisterClassEx: atom=%d err=%v", atom, err)
 
+	gEnumMonitors = nil
+	enumCB := syscall.NewCallback(monitorEnumProc)
+	ret, _, _ := pEnumDisplayMonitors.Call(0, 0, enumCB, 0)
+	logMsg("EnumDisplayMonitors: ret=%d count=%d", ret, len(gEnumMonitors))
+
+	if len(gEnumMonitors) == 0 {
+		// Fallback: single window covering virtual screen
+		logMsg("no monitors enumerated, falling back to virtual screen")
+		return createFallbackWindow(hInst, className)
+	}
+
+	var primaryHwnd uintptr
+
+	for i, mr := range gEnumMonitors {
+		w := mr.Rect.Right - mr.Rect.Left
+		h := mr.Rect.Bottom - mr.Rect.Top
+		logMsg("monitor[%d]: %d,%d %dx%d primary=%v", i,
+			mr.Rect.Left, mr.Rect.Top, w, h, mr.Primary)
+
+		hwnd, _, createErr := pCreateWindowExW.Call(
+			WS_EX_TOPMOST|WS_EX_LAYERED|WS_EX_TOOLWINDOW,
+			uintptr(unsafe.Pointer(className)),
+			uintptr(unsafe.Pointer(className)),
+			WS_POPUP,
+			uintptr(mr.Rect.Left), uintptr(mr.Rect.Top),
+			uintptr(w), uintptr(h),
+			0, 0, hInst, 0,
+		)
+		if hwnd == 0 {
+			logMsg("FATAL: CreateWindowEx failed for monitor %d: %v", i, createErr)
+			continue
+		}
+
+		pSetLayeredWindowAttributes.Call(hwnd, 0, 255, LWA_ALPHA)
+		gOverlays = append(gOverlays, hwnd)
+		logMsg("overlay[%d] hwnd=0x%X", i, hwnd)
+
+		if mr.Primary {
+			primaryHwnd = hwnd
+		}
+	}
+
+	if primaryHwnd == 0 && len(gOverlays) > 0 {
+		primaryHwnd = gOverlays[0]
+	}
+
+	if primaryHwnd == 0 {
+		showError("Failed to create overlay windows")
+	}
+
+	return primaryHwnd
+}
+
+func createFallbackWindow(hInst uintptr, className *uint16) uintptr {
 	x, _, _ := pGetSystemMetrics.Call(SM_XVIRTUALSCREEN)
 	y, _, _ := pGetSystemMetrics.Call(SM_YVIRTUALSCREEN)
 	cx, _, _ := pGetSystemMetrics.Call(SM_CXVIRTUALSCREEN)
 	cy, _, _ := pGetSystemMetrics.Call(SM_CYVIRTUALSCREEN)
-	logMsg("virtual screen: x=%d y=%d cx=%d cy=%d", x, y, cx, cy)
-
 	if cx == 0 || cy == 0 {
 		cx, _, _ = pGetSystemMetrics.Call(SM_CXSCREEN)
 		cy, _, _ = pGetSystemMetrics.Call(SM_CYSCREEN)
-		logMsg("fallback primary screen: cx=%d cy=%d", cx, cy)
 	}
 
 	hwnd, _, err := pCreateWindowExW.Call(
@@ -176,14 +276,12 @@ func createOverlayWindow() uintptr {
 		0, 0, hInst, 0,
 	)
 	if hwnd == 0 {
-		logMsg("FATAL: CreateWindowEx failed: %v", err)
+		logMsg("FATAL: fallback CreateWindowEx failed: %v", err)
 		showError("Failed to create overlay window")
 		return 0
 	}
-
-	ret, _, err := pSetLayeredWindowAttributes.Call(hwnd, 0, 255, LWA_ALPHA)
-	logMsg("SetLayeredWindowAttributes: ret=%d err=%v", ret, err)
-
+	pSetLayeredWindowAttributes.Call(hwnd, 0, 255, LWA_ALPHA)
+	gOverlays = append(gOverlays, hwnd)
 	return hwnd
 }
 
@@ -192,10 +290,16 @@ func overlayWndProc(hwnd uintptr, msg uint32, wparam uintptr, lparam uintptr) ui
 	case WM_PAINT:
 		var ps PAINTSTRUCT
 		hdc, _, _ := pBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
-		drawOverlayText(hwnd, hdc)
+		if hwnd == gHwnd {
+			drawOverlayText(hwnd, hdc)
+		}
 		pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 		return 0
 	case WM_TIMER:
+		if wparam == 2 {
+			animateText(hwnd)
+			return 0
+		}
 		checkAndToggle()
 		return 0
 	case WM_CLOSE:
@@ -223,7 +327,6 @@ func drawOverlayText(hwnd uintptr, hdc uintptr) {
 	if gMessage == "" {
 		return
 	}
-	logMsg("drawOverlayText: hdc=0x%X msg=%q", hdc, gMessage)
 
 	fontName, _ := syscall.UTF16PtrFromString("Microsoft YaHei")
 	font, _, _ := pCreateFontW.Call(
@@ -233,7 +336,6 @@ func drawOverlayText(hwnd uintptr, hdc uintptr) {
 		DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, DEFAULT_PITCH,
 		uintptr(unsafe.Pointer(fontName)),
 	)
-	logMsg("CreateFont: font=0x%X", font)
 	defer pDeleteObject.Call(font)
 
 	oldFont, _, _ := pSelectObject.Call(hdc, font)
@@ -242,31 +344,101 @@ func drawOverlayText(hwnd uintptr, hdc uintptr) {
 	pSetTextColor.Call(hdc, 0x00C8C8C8)
 	pSetBkMode.Call(hdc, TRANSPARENT)
 
-	var rect RECT
-	pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rect)))
-	logMsg("client rect: %d,%d,%d,%d", rect.Left, rect.Top, rect.Right, rect.Bottom)
+	if !gTextMeasured {
+		text, _ := syscall.UTF16PtrFromString(gMessage)
+		var sz SIZE
+		pGetTextExtentPoint32W.Call(hdc,
+			uintptr(unsafe.Pointer(text)),
+			uintptr(len([]rune(gMessage))),
+			uintptr(unsafe.Pointer(&sz)),
+		)
+		gTextW = sz.CX
+		gTextH = sz.CY
+		var cr RECT
+		pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&cr)))
+		gScreenW = cr.Right
+		gScreenH = cr.Bottom
+		gTextX = (gScreenW - gTextW) / 2
+		gTextY = (gScreenH - gTextH) / 2
+		gTextDX = gSpeed
+		gTextDY = gSpeed
+		gTextMeasured = true
+		logMsg("text measured: %dx%d client: %dx%d pos: %d,%d",
+			gTextW, gTextH, gScreenW, gScreenH, gTextX, gTextY)
+	}
 
+	rect := RECT{Left: gTextX, Top: gTextY, Right: gTextX + gTextW, Bottom: gTextY + gTextH}
 	text, _ := syscall.UTF16PtrFromString(gMessage)
-	ret, _, _ := pDrawTextW.Call(
+	pDrawTextW.Call(
 		hdc,
 		uintptr(unsafe.Pointer(text)),
 		^uintptr(0),
 		uintptr(unsafe.Pointer(&rect)),
-		DT_CENTER|DT_VCENTER|DT_SINGLELINE,
+		DT_LEFT|DT_TOP|DT_SINGLELINE,
 	)
-	logMsg("DrawText: ret=%d", ret)
+}
+
+func animateText(hwnd uintptr) {
+	if !gTextMeasured || gScreenW == 0 || gScreenH == 0 {
+		return
+	}
+	gTextX += gTextDX
+	gTextY += gTextDY
+	if gTextX < 0 {
+		gTextX = 0
+		gTextDX = gSpeed
+		perturbBounce()
+	} else if gTextX+gTextW > gScreenW {
+		gTextX = gScreenW - gTextW
+		gTextDX = -gSpeed
+		perturbBounce()
+	}
+	if gTextY < 0 {
+		gTextY = 0
+		gTextDY = gSpeed
+		perturbBounce()
+	} else if gTextY+gTextH > gScreenH {
+		gTextY = gScreenH - gTextH
+		gTextDY = -gSpeed
+		perturbBounce()
+	}
+	pInvalidateRect.Call(hwnd, 0, 1)
+}
+
+func perturbBounce() {
+	dxSign, dySign := int32(1), int32(1)
+	if gTextDX < 0 {
+		dxSign = -1
+	}
+	if gTextDY < 0 {
+		dySign = -1
+	}
+	dxMag := gSpeed + int32(rand.Intn(3)) - 1
+	dyMag := gSpeed + int32(rand.Intn(3)) - 1
+	if dxMag < 1 {
+		dxMag = 1
+	}
+	if dyMag < 1 {
+		dyMag = 1
+	}
+	gTextDX = dxSign * dxMag
+	gTextDY = dySign * dyMag
 }
 
 func showOverlay(hwnd uintptr) {
 	hwndTopmost := ^uintptr(0)
-	pSetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0,
-		uintptr(SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW))
-	pShowWindow.Call(hwnd, SW_SHOW)
-	pUpdateWindow.Call(hwnd) // force immediate WM_PAINT
+	for _, h := range gOverlays {
+		pSetWindowPos.Call(h, hwndTopmost, 0, 0, 0, 0,
+			uintptr(SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW))
+		pShowWindow.Call(h, SW_SHOW)
+		pUpdateWindow.Call(h)
+	}
 }
 
 func hideOverlay(hwnd uintptr) {
-	pShowWindow.Call(hwnd, SW_HIDE)
+	for _, h := range gOverlays {
+		pShowWindow.Call(h, SW_HIDE)
+	}
 }
 
 func showError(text string) {
