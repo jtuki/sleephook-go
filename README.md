@@ -1,5 +1,7 @@
 # SleepHook-Go
 
+![SleepHook-Go](resource/readme-slogan.jpg)
+
 定时锁屏工具 —— 强制自己按时睡觉，改掉熬夜坏习惯。
 
 Go 重写版，单 exe 部署，零外部依赖。原版 [SleepHook](https://github.com/jtuki/SleepHook)（C++/MFC）。
