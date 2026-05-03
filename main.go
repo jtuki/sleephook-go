@@ -72,6 +72,7 @@ func main() {
 	logMsg("starting timer")
 	pSetTimer.Call(gHwnd, 1, 1000, 0)
 	defer removeTrayIcon(gHwnd)
+	defer stopWebUI()
 	defer pKillTimer.Call(gHwnd, 1)
 	defer gHooks.uninstall()
 	defer gBlocker.unblock()

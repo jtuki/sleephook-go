@@ -173,6 +173,9 @@ func showTrayMenu(hwnd uintptr) {
 	sep, _ := syscall.UTF16PtrFromString("-")
 	pAppendMenuW.Call(menu, MF_SEPARATOR, 0, uintptr(unsafe.Pointer(sep)))
 
+	settings, _ := syscall.UTF16PtrFromString("设置...")
+	pAppendMenuW.Call(menu, MF_STRING, 4, uintptr(unsafe.Pointer(settings)))
+
 	autoFlags := uint32(MF_STRING)
 	if isAutoStartEnabled() {
 		autoFlags |= MF_CHECKED
