@@ -74,16 +74,16 @@ func setAutoStart(enable bool) error {
 	defer pRegCloseKey.Call(hKey)
 
 	if enable {
-		data, err := syscall.UTF16PtrFromString(`"` + exe + `"`)
+		u16, err := syscall.UTF16FromString(`"` + exe + `"`)
 		if err != nil {
 			return err
 		}
-		size := uint32((len([]rune(`"`+exe+`"`)) + 1) * 2)
+		size := uint32(len(u16) * 2)
 		ret, _, _ = pRegSetValueExW.Call(
 			hKey,
 			uintptr(unsafe.Pointer(valueNameStr)),
 			0, REG_SZ,
-			uintptr(unsafe.Pointer(data)),
+			uintptr(unsafe.Pointer(&u16[0])),
 			uintptr(size),
 		)
 		if ret != 0 {
