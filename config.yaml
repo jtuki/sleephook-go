@@ -1,9 +1,12 @@
 # SleepHook-Go configuration
 # https://github.com/jtuki/sleephook-go
-#
+
+# Message displayed on the lock screen (optional, has default)
+message: "不熬夜！早点休息！"
+
 # lock_periods: list of time ranges to lock the screen.
 #   start / end: "hh:mm" or "hh:mm:ss" format (24-hour).
-#   Supports overnight ranges (e.g. 23:00 -> 07:00 = 11pm to next 7am).
+#   Overnight ranges (start > end) must not exceed 1 hour.
 #
 # Changes take effect within 1 minute — no restart needed.
 

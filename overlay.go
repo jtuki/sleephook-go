@@ -29,6 +29,7 @@ const (
 
 	IDC_ARROW = 32512
 
+	WM_PAINT   = 0x000F
 	WM_TIMER   = 0x0113
 	WM_CLOSE   = 0x0010
 	WM_DESTROY = 0x0002
@@ -37,6 +38,16 @@ const (
 
 	GENERIC_READ  = 0x80000000
 	OPEN_EXISTING = 3
+
+	// GDI text drawing
+	TRANSPARENT      = 1
+	DT_CENTER        = 0x00000001
+	DT_VCENTER       = 0x00000004
+	DT_SINGLELINE    = 0x00000020
+	DEFAULT_CHARSET  = 1
+	FW_BOLD          = 700
+	CLEARTYPE_QUALITY = 5
+	DEFAULT_PITCH    = 0
 )
 
 type WNDCLASSEX struct {
@@ -62,6 +73,19 @@ type MSG struct {
 	Time    uint32
 	PtX     int32
 	PtY     int32
+}
+
+type RECT struct {
+	Left, Top, Right, Bottom int32
+}
+
+type PAINTSTRUCT struct {
+	Hdc         uintptr
+	FErase      int32
+	RcPaint     RECT
+	FRestore    int32
+	FIncUpdate  int32
+	RgbReserved [32]byte
 }
 
 var (
@@ -91,9 +115,20 @@ var (
 	pCallNextHookEx      = user32.NewProc("CallNextHookEx")
 
 	pCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
+	pCreateFileW      = kernel32.NewProc("CreateFileW")
+	pCloseHandle      = kernel32.NewProc("CloseHandle")
 
-	pCreateFileW = kernel32.NewProc("CreateFileW")
-	pCloseHandle = kernel32.NewProc("CloseHandle")
+	// GDI text drawing
+	pBeginPaint    = user32.NewProc("BeginPaint")
+	pEndPaint      = user32.NewProc("EndPaint")
+	pGetClientRect = user32.NewProc("GetClientRect")
+	pDrawTextW     = user32.NewProc("DrawTextW")
+	pCreateFontW   = gdi32.NewProc("CreateFontW")
+	pSetTextColor  = gdi32.NewProc("SetTextColor")
+	pSetBkMode     = gdi32.NewProc("SetBkMode")
+	pSelectObject  = gdi32.NewProc("SelectObject")
+	pDeleteObject  = gdi32.NewProc("DeleteObject")
+	pUpdateWindow  = user32.NewProc("UpdateWindow")
 )
 
 var overlayWndProcCB uintptr
@@ -154,6 +189,12 @@ func createOverlayWindow() uintptr {
 
 func overlayWndProc(hwnd uintptr, msg uint32, wparam uintptr, lparam uintptr) uintptr {
 	switch msg {
+	case WM_PAINT:
+		var ps PAINTSTRUCT
+		hdc, _, _ := pBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+		drawOverlayText(hwnd, hdc)
+		pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+		return 0
 	case WM_TIMER:
 		checkAndToggle()
 		return 0
@@ -178,11 +219,50 @@ func overlayWndProc(hwnd uintptr, msg uint32, wparam uintptr, lparam uintptr) ui
 	return ret
 }
 
+func drawOverlayText(hwnd uintptr, hdc uintptr) {
+	if gMessage == "" {
+		return
+	}
+	logMsg("drawOverlayText: hdc=0x%X msg=%q", hdc, gMessage)
+
+	fontName, _ := syscall.UTF16PtrFromString("Microsoft YaHei")
+	font, _, _ := pCreateFontW.Call(
+		uintptr(^uint32(72-1)),
+		0, 0, 0,
+		FW_BOLD, 0, 0, 0,
+		DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+		uintptr(unsafe.Pointer(fontName)),
+	)
+	logMsg("CreateFont: font=0x%X", font)
+	defer pDeleteObject.Call(font)
+
+	oldFont, _, _ := pSelectObject.Call(hdc, font)
+	defer pSelectObject.Call(hdc, oldFont)
+
+	pSetTextColor.Call(hdc, 0x00C8C8C8)
+	pSetBkMode.Call(hdc, TRANSPARENT)
+
+	var rect RECT
+	pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rect)))
+	logMsg("client rect: %d,%d,%d,%d", rect.Left, rect.Top, rect.Right, rect.Bottom)
+
+	text, _ := syscall.UTF16PtrFromString(gMessage)
+	ret, _, _ := pDrawTextW.Call(
+		hdc,
+		uintptr(unsafe.Pointer(text)),
+		^uintptr(0),
+		uintptr(unsafe.Pointer(&rect)),
+		DT_CENTER|DT_VCENTER|DT_SINGLELINE,
+	)
+	logMsg("DrawText: ret=%d", ret)
+}
+
 func showOverlay(hwnd uintptr) {
 	hwndTopmost := ^uintptr(0)
 	pSetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0,
 		uintptr(SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW))
 	pShowWindow.Call(hwnd, SW_SHOW)
+	pUpdateWindow.Call(hwnd) // force immediate WM_PAINT
 }
 
 func hideOverlay(hwnd uintptr) {

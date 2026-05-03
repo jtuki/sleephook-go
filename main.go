@@ -9,6 +9,7 @@ import (
 
 var (
 	gCfg        []TimeRange
+	gMessage    string
 	gHooks      *hookManager
 	gBlocker    *taskmgrBlocker
 	gHwnd       uintptr
@@ -24,23 +25,29 @@ func main() {
 
 	exe, _ := os.Executable()
 	logMsg("exe: %s", exe)
-	logMsg("arch: %s %d-bit", runtime.GOARCH, uintptr(0)*8+32)
 
 	cfgPath := configPath()
 	logMsg("config path: %s", cfgPath)
 
 	var err error
-	gCfg, err = loadConfig(cfgPath)
+	gCfg, gMessage, err = loadConfig(cfgPath)
 	if err != nil {
 		logMsg("FATAL: loadConfig: %v", err)
 		showError(err.Error())
 		return
 	}
 	for i, tr := range gCfg {
-		logMsg("  period[%d]: %02d:%02d:%02d - %02d:%02d:%02d",
-			i, tr.StartSec/3600, tr.StartSec%3600/60, tr.StartSec%60,
-			tr.StopSec/3600, tr.StopSec%3600/60, tr.StopSec%60)
+		kind := "normal"
+		hours := (tr.StopSec - tr.StartSec + 86400) % 86400 / 3600
+		if tr.StartSec > tr.StopSec {
+			kind = "overnight"
+		}
+		logMsg("  period[%d]: %02d:%02d-%02d:%02d (%s, ~%dh)",
+			i, tr.StartSec/3600, tr.StartSec%3600/60,
+			tr.StopSec/3600, tr.StopSec%3600/60,
+			kind, hours)
 	}
+	logMsg("message: %s", gMessage)
 	gLastReload = time.Now()
 
 	gHooks = newHookManager()
@@ -84,9 +91,10 @@ func checkAndToggle() {
 	now := time.Now()
 
 	if now.Sub(gLastReload) >= 60*time.Second {
-		if cfg, err := loadConfig(configPath()); err == nil && len(cfg) > 0 {
+		if cfg, msg, err := loadConfig(configPath()); err == nil && len(cfg) > 0 {
 			gCfg = cfg
-			logMsg("config reloaded: %d periods", len(gCfg))
+			gMessage = msg
+			logMsg("config reloaded: %d periods, message=%q", len(gCfg), gMessage)
 		} else if err != nil {
 			logMsg("config reload failed: %v", err)
 		}
