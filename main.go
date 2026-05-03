@@ -53,6 +53,7 @@ func main() {
 	}
 	logMsg("message: %s speed: %d opacity: %d", gMessage, gSpeedVal, gOpacityVal)
 	gLastReload = time.Now()
+	gOpacity = byte(gOpacityVal)
 
 	gHooks = newHookManager()
 	gBlocker = newBlocker()

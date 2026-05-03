@@ -433,6 +433,7 @@ func perturbBounce() {
 func showOverlay(hwnd uintptr) {
 	hwndTopmost := ^uintptr(0)
 	for _, h := range gOverlays {
+		pSetLayeredWindowAttributes.Call(h, 0, uintptr(gOpacity), LWA_ALPHA)
 		pSetWindowPos.Call(h, hwndTopmost, 0, 0, 0, 0,
 			uintptr(SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW))
 		pShowWindow.Call(h, SW_SHOW)
