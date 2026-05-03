@@ -49,6 +49,15 @@ func loadConfig(path string) ([]TimeRange, error) {
 		if err != nil {
 			return nil, fmt.Errorf("lock_periods[%d].end: %w", i, err)
 		}
+		// Overnight ranges must not exceed 1 hour
+		if start > stop {
+			duration := (86400 - start + stop)
+			if duration > 3600 {
+				return nil, fmt.Errorf(
+					"lock_periods[%d] %s-%s: overnight range is %d min, max is 60 min",
+					i, p.Start, p.End, duration/60)
+			}
+		}
 		ranges = append(ranges, TimeRange{start, stop})
 	}
 	return ranges, nil

@@ -146,7 +146,7 @@ func createOverlayWindow() uintptr {
 		return 0
 	}
 
-	ret, _, err := pSetLayeredWindowAttributes.Call(hwnd, 0, 128, LWA_ALPHA)
+	ret, _, err := pSetLayeredWindowAttributes.Call(hwnd, 0, 255, LWA_ALPHA)
 	logMsg("SetLayeredWindowAttributes: ret=%d err=%v", ret, err)
 
 	return hwnd
