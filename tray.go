@@ -62,6 +62,7 @@ var (
 	pDestroyMenu         = user32.NewProc("DestroyMenu")
 	pGetCursorPos        = user32.NewProc("GetCursorPos")
 	pSetForegroundWindow = user32.NewProc("SetForegroundWindow")
+	pPostMessage        = user32.NewProc("PostMessageW")
 
 	pGdiplusStartup         = gdiplus.NewProc("GdiplusStartup")
 	pGdiplusShutdown        = gdiplus.NewProc("GdiplusShutdown")
@@ -194,6 +195,7 @@ func showTrayMenu(hwnd uintptr) {
 	pSetForegroundWindow.Call(hwnd)
 	pTrackPopupMenu.Call(menu, uintptr(TPM_LEFTALIGN),
 		uintptr(pt.X), uintptr(pt.Y), 0, hwnd, 0)
+	pPostMessage.Call(hwnd, 0, 0, 0) // WM_NULL: ensure WM_COMMAND delivery
 	pDestroyMenu.Call(menu)
 }
 

@@ -150,11 +150,12 @@ func checkAndToggle() {
 
 	// Skip locking during extension period
 	if wantLock && gExtendUntil.After(now) {
+		logMsg("extend active, skipping lock (until %s)", gExtendUntil.Format("15:04:05"))
 		wantLock = false
 	}
 
 	if wantLock && !gLocked {
-		logMsg(">>> LOCKING at %s", now.Format("15:04:05"))
+		logMsg(">>> LOCKING at %s (extendUntil=%s)", now.Format("15:04:05"), gExtendUntil.Format("15:04:05"))
 		if err := gHooks.install(); err != nil {
 			logMsg("ERROR: hook install: %v", err)
 		}
