@@ -158,10 +158,24 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		header := "# SleepHook-Go configuration\n# https://github.com/jtuki/sleephook-go\n\n"
-		if err := os.WriteFile(configPath()+".tmp", []byte(header+string(data)), 0644); err != nil {
+		content := []byte("# SleepHook-Go configuration\n# https://github.com/jtuki/sleephook-go\n" +
+			"#\n# message: \u9501\u5c4f\u63d0\u793a\u8bed\n# speed: \u6587\u5b57\u79fb\u52a8\u901f\u5ea6 1-10 (\u9ed8\u8ba4 2)\n" +
+			"# opacity: \u906e\u7f69\u900f\u660e\u5ea6 1-255 (\u9ed8\u8ba4 240\uff0c\u8d8a\u5c0f\u8d8a\u900f\u660e)\n" +
+			"# lock_periods: \u9501\u5b9a\u65f6\u6bb5\u5217\u8868\uff0cstart/end: hh:mm \u6216 hh:mm:ss\n" +
+			"#   \u8de8\u5348\u591c\u65f6\u6bb5\u603b\u65f6\u957f\u4e0d\u5f97\u8d85\u8fc71\u5c0f\u65f6\uff0c\u4fee\u6539\u540e1\u5206\u949f\u5185\u81ea\u52a8\u751f\u6548\n\n" +
+			string(data))
+		tmpPath := configPath() + ".tmp"
+		if err := os.WriteFile(tmpPath, content, 0644); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
+		}
+		if err := os.Rename(tmpPath, configPath()); err != nil {
+			os.Remove(tmpPath)
+			if err2 := os.WriteFile(configPath(), content, 0644); err2 != nil {
+				http.Error(w, err2.Error(), 500)
+				return
+			}
+			logMsg("config saved via fallback (rename failed: %v)", err)
 		}
 		w.WriteHeader(200)
 		fmt.Fprint(w, "OK")
