@@ -76,7 +76,7 @@ var (
 	pSetWindowPos               = user32.NewProc("SetWindowPos")
 	pSetLayeredWindowAttributes = user32.NewProc("SetLayeredWindowAttributes")
 	pGetSystemMetrics           = user32.NewProc("GetSystemMetrics")
-	pGetModuleHandleW           = user32.NewProc("GetModuleHandleW")
+	pGetModuleHandleW           = kernel32.NewProc("GetModuleHandleW")
 	pPostQuitMessage            = user32.NewProc("PostQuitMessage")
 	pGetMessageW                = user32.NewProc("GetMessageW")
 	pTranslateMessage           = user32.NewProc("TranslateMessage")
