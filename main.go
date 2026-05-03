@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"os"
 	"runtime"
 	"time"
 	"unsafe"
@@ -20,8 +20,11 @@ func main() {
 	runtime.LockOSThread()
 	initLog()
 	defer closeLog()
+	defer recoverPanic()
 
-	logMsg("initializing...")
+	exe, _ := os.Executable()
+	logMsg("exe: %s", exe)
+	logMsg("arch: %s %d-bit", runtime.GOARCH, uintptr(0)*8+32)
 
 	cfgPath := configPath()
 	logMsg("config path: %s", cfgPath)
@@ -29,7 +32,7 @@ func main() {
 	var err error
 	gCfg, err = loadConfig(cfgPath)
 	if err != nil {
-		logMsg("FATAL: loadConfig failed: %v", err)
+		logMsg("FATAL: loadConfig: %v", err)
 		showError(err.Error())
 		return
 	}
@@ -43,18 +46,18 @@ func main() {
 	gHooks = newHookManager()
 	gBlocker = newBlocker()
 
-	logMsg("creating overlay window...")
+	logMsg("calling createOverlayWindow...")
 	gHwnd = createOverlayWindow()
 	if gHwnd == 0 {
 		logMsg("FATAL: createOverlayWindow returned 0")
 		return
 	}
-	logMsg("overlay window created: hwnd=0x%X", gHwnd)
+	logMsg("overlay window OK: hwnd=0x%X", gHwnd)
 
-	logMsg("adding tray icon...")
+	logMsg("calling addTrayIcon...")
 	addTrayIcon(gHwnd)
 
-	logMsg("starting timer (1s)")
+	logMsg("starting timer")
 	pSetTimer.Call(gHwnd, 1, 1000, 0)
 	defer removeTrayIcon(gHwnd)
 	defer pKillTimer.Call(gHwnd, 1)
@@ -80,13 +83,12 @@ func main() {
 func checkAndToggle() {
 	now := time.Now()
 
-	// Reload config every 60 seconds; on failure keep current config
 	if now.Sub(gLastReload) >= 60*time.Second {
 		if cfg, err := loadConfig(configPath()); err == nil && len(cfg) > 0 {
 			gCfg = cfg
 			logMsg("config reloaded: %d periods", len(gCfg))
 		} else if err != nil {
-			logMsg("config reload failed: %v (keeping current)", err)
+			logMsg("config reload failed: %v", err)
 		}
 		gLastReload = now
 	}
@@ -96,7 +98,7 @@ func checkAndToggle() {
 	if wantLock && !gLocked {
 		logMsg(">>> LOCKING at %s", now.Format("15:04:05"))
 		if err := gHooks.install(); err != nil {
-			logMsg("ERROR: hook install failed: %v", err)
+			logMsg("ERROR: hook install: %v", err)
 		}
 		showOverlay(gHwnd)
 		gBlocker.block()
@@ -110,10 +112,4 @@ func checkAndToggle() {
 		gLocked = false
 		updateTrayTooltip(gHwnd, "SleepHook - 运行中")
 	}
-}
-
-func logLockedStatus() {
-	now := time.Now()
-	wantLock := shouldLock(now, gCfg)
-	logMsg(fmt.Sprintf("time=%s locked=%v wantLock=%v", now.Format("15:04:05"), gLocked, wantLock))
 }
