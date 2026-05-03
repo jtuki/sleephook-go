@@ -17,8 +17,8 @@ type configFile struct {
 }
 
 type lockPeriod struct {
-	Start string `yaml:"start"`
-	End   string `yaml:"end"`
+	Start string `yaml:"start" json:"start"`
+	End   string `yaml:"end" json:"end"`
 }
 
 // TimeRange represents a lock period as seconds since midnight.
