@@ -16,6 +16,7 @@ GOOS=windows GOARCH=amd64 go build \
     -o "$OUTDIR/SleepHook.exe" .
 
 cp config.yaml "$OUTDIR/"
+cp resource/sleep-icon.png "$OUTDIR/"
 
 echo "Done → $OUTDIR/"
 ls -lh "$OUTDIR/"

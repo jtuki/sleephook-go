@@ -3,6 +3,7 @@ package main
 import (
 	"math/rand"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -309,6 +310,9 @@ func overlayWndProc(hwnd uintptr, msg uint32, wparam uintptr, lparam uintptr) ui
 		if wparam == 1 {
 			logMsg("tray menu: exit selected")
 			pPostQuitMessage.Call(0)
+			return 0
+		} else if wparam == 2 {
+			extendLock(10 * time.Minute)
 			return 0
 		}
 	case WM_TRAYICON:

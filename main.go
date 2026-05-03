@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"time"
@@ -17,6 +18,7 @@ var (
 	gLastReload time.Time
 	gSpeedVal   int
 	gOpacityVal int
+	gExtendUntil time.Time
 )
 
 func main() {
@@ -89,8 +91,43 @@ func main() {
 	}
 }
 
+func extendLock(d time.Duration) {
+	gExtendUntil = time.Now().Add(d)
+	logMsg("extend: skip locking until %s", gExtendUntil.Format("15:04:05"))
+	// If currently locked, unlock immediately
+	if gLocked {
+		pKillTimer.Call(gHwnd, 2)
+		gHooks.uninstall()
+		hideOverlay(gHwnd)
+		gBlocker.unblock()
+		gLocked = false
+	}
+	updateTooltip()
+}
+
+func updateTooltip() {
+	now := time.Now()
+	if gExtendUntil.After(now) {
+		remaining := time.Until(gExtendUntil).Truncate(time.Second)
+		updateTrayTooltip(gHwnd, fmt.Sprintf("SleepHook - 延长中 (剩余 %s)", remaining))
+	} else if gLocked {
+		updateTrayTooltip(gHwnd, "SleepHook - 锁定中")
+	} else {
+		updateTrayTooltip(gHwnd, "SleepHook - 运行中")
+	}
+}
+
 func checkAndToggle() {
 	now := time.Now()
+
+	// Update tooltip every second if extending
+	if gExtendUntil.After(now) {
+		updateTooltip()
+	} else if !gExtendUntil.IsZero() && !gLocked {
+		// Extension just expired, reset tooltip
+		gExtendUntil = time.Time{}
+		updateTrayTooltip(gHwnd, "SleepHook - 运行中")
+	}
 
 	if now.Sub(gLastReload) >= 60*time.Second {
 		if cfg, msg, speed, opacity, err := loadConfig(configPath()); err == nil && len(cfg) > 0 {
@@ -108,6 +145,11 @@ func checkAndToggle() {
 	}
 
 	wantLock := shouldLock(now, gCfg)
+
+	// Skip locking during extension period
+	if wantLock && gExtendUntil.After(now) {
+		wantLock = false
+	}
 
 	if wantLock && !gLocked {
 		logMsg(">>> LOCKING at %s", now.Format("15:04:05"))
@@ -129,6 +171,6 @@ func checkAndToggle() {
 		hideOverlay(gHwnd)
 		gBlocker.unblock()
 		gLocked = false
-		updateTrayTooltip(gHwnd, "SleepHook - 运行中")
+		updateTooltip()
 	}
 }

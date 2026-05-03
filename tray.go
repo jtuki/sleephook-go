@@ -1,7 +1,11 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"fmt"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -14,12 +18,11 @@ const (
 	NIF_ICON    = 0x00000002
 	NIF_TIP     = 0x00000004
 
-	IDI_APPLICATION = 32512
-
 	WM_TRAYICON  = 0x0401 // WM_USER + 1
 	WM_RBUTTONUP = 0x0205
 
-	MF_STRING    = 0x00000000
+	MF_STRING  = 0x00000000
+	MF_SEPARATOR = 0x00000800
 	TPM_LEFTALIGN = 0x0000
 )
 
@@ -41,22 +44,84 @@ type NOTIFYICONDATAW struct {
 	HBalloonIcon     uintptr
 }
 
+type GdiplusStartupInput struct {
+	GdiplusVersion          uint32
+	DebugEventCallback      uintptr
+	SuppressBackgroundThread int32
+	SuppressExternalCodecs  int32
+}
+
 var (
 	shell32 = syscall.NewLazyDLL("shell32.dll")
+	gdiplus = syscall.NewLazyDLL("gdiplus.dll")
 
 	pShellNotifyIconW    = shell32.NewProc("Shell_NotifyIconW")
-	pLoadIconW           = user32.NewProc("LoadIconW")
 	pCreatePopupMenu     = user32.NewProc("CreatePopupMenu")
 	pAppendMenuW         = user32.NewProc("AppendMenuW")
 	pTrackPopupMenu      = user32.NewProc("TrackPopupMenu")
 	pDestroyMenu         = user32.NewProc("DestroyMenu")
 	pGetCursorPos        = user32.NewProc("GetCursorPos")
 	pSetForegroundWindow = user32.NewProc("SetForegroundWindow")
+
+	pGdiplusStartup         = gdiplus.NewProc("GdiplusStartup")
+	pGdiplusShutdown        = gdiplus.NewProc("GdiplusShutdown")
+	pGdipCreateBitmapFromFile = gdiplus.NewProc("GdipCreateBitmapFromFile")
+	pGdipCreateHICONFromBitmap = gdiplus.NewProc("GdipCreateHICONFromBitmap")
+	pGdipDisposeImage       = gdiplus.NewProc("GdipDisposeImage")
+	pDestroyIcon            = user32.NewProc("DestroyIcon")
 )
 
+var gTrayIcon uintptr
+
+func loadPNGIcon() uintptr {
+	iconPath := iconFilePath()
+	if _, err := os.Stat(iconPath); err != nil {
+		logMsg("icon not found: %s, using default", iconPath)
+		return 0
+	}
+
+	var token uintptr
+	si := GdiplusStartupInput{GdiplusVersion: 1}
+	ret, _, _ := pGdiplusStartup.Call(uintptr(unsafe.Pointer(&token)), uintptr(unsafe.Pointer(&si)), 0)
+	if ret != 0 {
+		logMsg("GdiplusStartup failed: %d", ret)
+		return 0
+	}
+	defer pGdiplusShutdown.Call(token)
+
+	pathPtr, _ := syscall.UTF16PtrFromString(iconPath)
+	var bitmap uintptr
+	ret, _, _ = pGdipCreateBitmapFromFile.Call(uintptr(unsafe.Pointer(pathPtr)), uintptr(unsafe.Pointer(&bitmap)))
+	if ret != 0 || bitmap == 0 {
+		logMsg("GdipCreateBitmapFromFile failed: %d", ret)
+		return 0
+	}
+	defer pGdipDisposeImage.Call(bitmap)
+
+	var hicon uintptr
+	ret, _, _ = pGdipCreateHICONFromBitmap.Call(bitmap, uintptr(unsafe.Pointer(&hicon)))
+	if ret != 0 || hicon == 0 {
+		logMsg("GdipCreateHICONFromBitmap failed: %d", ret)
+		return 0
+	}
+
+	logMsg("loaded icon from %s: hicon=0x%X", iconPath, hicon)
+	return hicon
+}
+
+func iconFilePath() string {
+	exe, err := os.Executable()
+	if err == nil {
+		p := filepath.Join(filepath.Dir(exe), "sleep-icon.png")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "sleep-icon.png"
+}
+
 func addTrayIcon(hwnd uintptr) {
-	icon, _, err := pLoadIconW.Call(0, IDI_APPLICATION)
-	logMsg("LoadIcon: icon=0x%X err=%v", icon, err)
+	gTrayIcon = loadPNGIcon()
 
 	var nid NOTIFYICONDATAW
 	nid.CbSize = uint32(unsafe.Sizeof(nid))
@@ -64,7 +129,7 @@ func addTrayIcon(hwnd uintptr) {
 	nid.UID = 1
 	nid.UFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP
 	nid.UCallbackMessage = WM_TRAYICON
-	nid.HIcon = icon
+	nid.HIcon = gTrayIcon
 	copyTip(&nid.SzTip, "SleepHook - 运行中")
 
 	ret, _, err := pShellNotifyIconW.Call(NIM_ADD, uintptr(unsafe.Pointer(&nid)))
@@ -77,6 +142,10 @@ func removeTrayIcon(hwnd uintptr) {
 	nid.Hwnd = hwnd
 	nid.UID = 1
 	pShellNotifyIconW.Call(NIM_DELETE, uintptr(unsafe.Pointer(&nid)))
+	if gTrayIcon != 0 {
+		pDestroyIcon.Call(gTrayIcon)
+		gTrayIcon = 0
+	}
 }
 
 func updateTrayTooltip(hwnd uintptr, text string) {
@@ -91,8 +160,21 @@ func updateTrayTooltip(hwnd uintptr, text string) {
 
 func showTrayMenu(hwnd uintptr) {
 	menu, _, _ := pCreatePopupMenu.Call()
-	text, _ := syscall.UTF16PtrFromString("退出 SleepHook")
-	pAppendMenuW.Call(menu, MF_STRING, 1, uintptr(unsafe.Pointer(text)))
+
+	extendLabel := "延长 10 分钟"
+	if gExtendUntil.After(time.Now()) {
+		remaining := time.Until(gExtendUntil).Truncate(time.Second)
+		extendLabel = fmt.Sprintf("延长 10 分钟 (剩余 %s)", remaining)
+	}
+
+	ext, _ := syscall.UTF16PtrFromString(extendLabel)
+	pAppendMenuW.Call(menu, MF_STRING, 2, uintptr(unsafe.Pointer(ext)))
+
+	sep, _ := syscall.UTF16PtrFromString("-")
+	pAppendMenuW.Call(menu, MF_SEPARATOR, 0, uintptr(unsafe.Pointer(sep)))
+
+	quit, _ := syscall.UTF16PtrFromString("退出 SleepHook")
+	pAppendMenuW.Call(menu, MF_STRING, 1, uintptr(unsafe.Pointer(quit)))
 
 	var pt struct{ X, Y int32 }
 	pGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
