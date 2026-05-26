@@ -59,7 +59,10 @@ func closeLog() {
 	logMu.Lock()
 	defer logMu.Unlock()
 	if logFile != nil {
-		writeLog("=== SleepHook stopped ===")
+		line := fmt.Sprintf("%s === SleepHook stopped ===\n", time.Now().Format("15:04:05.000"))
+		logFile.WriteString(line)
+		logFile.Sync()
+		os.Stderr.WriteString(line)
 		logFile.Close()
 		logFile = nil
 	}

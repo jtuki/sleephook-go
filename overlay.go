@@ -38,6 +38,13 @@ const (
 	WM_COMMAND = 0x0111
 	WM_QUIT    = 0x0012
 
+	MB_YESNO         = 0x00000004
+	MB_ICONWARNING   = 0x00000030
+	MB_SYSTEMMODAL   = 0x00001000
+	MB_SETFOREGROUND = 0x00010000
+	MB_TOPMOST       = 0x00040000
+	IDNO             = 7
+
 	GENERIC_READ  = 0x80000000
 	OPEN_EXISTING = 3
 
@@ -124,6 +131,7 @@ var (
 	pKillTimer                  = user32.NewProc("KillTimer")
 	pLoadCursorW                = user32.NewProc("LoadCursorW")
 	pMessageBoxW                = user32.NewProc("MessageBoxW")
+	pMessageBoxTimeoutW         = user32.NewProc("MessageBoxTimeoutW")
 
 	pSetWindowsHookExW   = user32.NewProc("SetWindowsHookExW")
 	pUnhookWindowsHookEx = user32.NewProc("UnhookWindowsHookEx")
@@ -155,13 +163,13 @@ var (
 var overlayWndProcCB uintptr
 
 var (
-	gTextX, gTextY   int32
-	gTextDX, gTextDY int32
-	gSpeed           int32 = 2
-	gOpacity         byte  = 240
-	gTextW, gTextH   int32
+	gTextX, gTextY     int32
+	gTextDX, gTextDY   int32
+	gSpeed             int32 = 2
+	gOpacity           byte  = 240
+	gTextW, gTextH     int32
 	gScreenW, gScreenH int32
-	gTextMeasured    bool
+	gTextMeasured      bool
 )
 
 // Per-monitor overlay windows
@@ -169,8 +177,8 @@ var gOverlays []uintptr
 
 // Collected during EnumDisplayMonitors callback
 var gEnumMonitors []struct {
-	Rect     RECT
-	Primary  bool
+	Rect    RECT
+	Primary bool
 }
 
 func monitorEnumProc(hMonitor uintptr, hdc uintptr, lprc uintptr, lParam uintptr) uintptr {
@@ -320,6 +328,26 @@ func overlayWndProc(hwnd uintptr, msg uint32, wparam uintptr, lparam uintptr) ui
 		} else if wparam == 4 {
 			openConfigUI()
 			return 0
+		} else if wparam == 5 {
+			if gNetGuard != nil {
+				gNetGuard.skip(3 * time.Minute)
+			}
+			return 0
+		} else if wparam == 6 {
+			if gNetGuard != nil {
+				gNetGuard.skip(5 * time.Minute)
+			}
+			return 0
+		} else if wparam == 7 {
+			if gNetGuard != nil {
+				gNetGuard.skip(10 * time.Minute)
+			}
+			return 0
+		} else if wparam == 9 {
+			if gNetGuard != nil {
+				gNetGuard.cancelActiveBlock()
+			}
+			return 0
 		}
 	case WM_TRAYICON:
 		if lparam == WM_RBUTTONUP {
@@ -457,4 +485,24 @@ func showError(text string) {
 	t, _ := syscall.UTF16PtrFromString(text)
 	title, _ := syscall.UTF16PtrFromString("SleepHook")
 	pMessageBoxW.Call(0, uintptr(unsafe.Pointer(t)), uintptr(unsafe.Pointer(title)), 0x10)
+}
+
+func confirmScheduledDisconnect(timeout time.Duration) bool {
+	text := "已到定点断网时刻。\n\n选择“是”：立即断网，并在接下来的 120 分钟阻止网络恢复。\n选择“否”：我会手动断网，本次不再强制。\n\n30 秒无操作将自动断网。"
+	t, _ := syscall.UTF16PtrFromString(text)
+	title, _ := syscall.UTF16PtrFromString("SleepHook 定点断网")
+	flags := uintptr(MB_YESNO | MB_ICONWARNING | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST)
+	ret, _, err := pMessageBoxTimeoutW.Call(
+		0,
+		uintptr(unsafe.Pointer(t)),
+		uintptr(unsafe.Pointer(title)),
+		flags,
+		0,
+		uintptr(timeout/time.Millisecond),
+	)
+	if ret == 0 {
+		logMsg("scheduled disconnect prompt failed or timed out without result: %v", err)
+		return true
+	}
+	return ret != IDNO
 }

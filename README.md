@@ -13,12 +13,16 @@ Go 重写版，单 exe 部署，零外部依赖。原版 [SleepHook](https://git
 - 多显示器覆盖，支持不同分辨率/DPI 的扩展屏幕
 - 低级钩子拦截键盘鼠标，无需 DLL 注入
 - 锁屏文字动画（DVD 屏保风格），速度可配置
+- 每 200ms 扫描本地网卡 IP 变化；每次公网 IP 检查完成 3 秒后再次检查，IP 变化后立即确认是否仍在允许国家/地区列表，不符合或无法确认时强制断开 Windows 网络
+- 托盘菜单可临时屏蔽网络检查 3/5/10 分钟
 
 ## 使用
 
 1. 编辑 `config.yaml` 设置锁定时段
 2. 将 `SleepHook.exe` 和 `config.yaml` 放同一目录
-3. 运行（建议管理员权限，可阻止任务管理器）
+3. 运行（建议管理员权限，可阻止任务管理器，并允许禁用网卡断网）
+
+右键托盘图标可选择“屏蔽网络检查 3/5/10 分钟”。未屏蔽且网络检查开启时，程序会每 200ms 扫描本地网卡 IP 指纹；本地 IP 变化会立即触发公网校验。公网校验通过多个 IP 定位服务交叉确认当前 IP，只有所有成功结果都在允许列表中才继续联网。检查站点按 round-robin 轮换，每轮拿到两个成功结果就停止，降低单个站点访问频率。
 
 ## 配置
 
@@ -26,6 +30,20 @@ Go 重写版，单 exe 部署，零外部依赖。原版 [SleepHook](https://git
 message: "不熬夜！早点休息！"
 speed: 2
 opacity: 240
+network_check:
+  enabled: true
+  allowed_countries:
+    - "SG"
+    - "US"
+    - "HK"
+  providers:
+    - "ipinfo"
+    - "ifconfig"
+    - "ip-api"
+    - "ipapi"
+    - "ipwhois"
+  force_disconnect_times:
+    - "23:30"
 lock_periods:
   - start: "00:40"
     end:   "07:00"
@@ -38,6 +56,10 @@ lock_periods:
 | `message` | 锁屏显示文字（可选，有默认值） |
 | `speed` | 文字移动速度 1-10（可选，默认 2） |
 | `opacity` | 遮罩透明度 1-255（可选，默认 240，越小越透明） |
+| `network_check.enabled` | 是否开启公网 IP 地区检查（旧配置未设置时默认开启） |
+| `network_check.allowed_countries` | 允许联网的 ISO 3166-1 alpha-2 国家/地区码列表，如 `SG`、`US`、`HK` |
+| `network_check.providers` | 公网 IP 检查站点列表，默认全部：`ipinfo`、`ifconfig`、`ip-api`、`ipapi`、`ipwhois`，开启检查时至少需要 2 个 |
+| `network_check.force_disconnect_times` | 定点断网提醒时刻列表，格式 `hh:mm` 或 `hh:mm:ss`；触发时先弹框，确认或 30 秒无操作会断网并在 120 分钟内持续阻止网络恢复；选择手动断网则本次不强制；右键托盘可取消主动屏蔽网络 |
 | `lock_periods` | 锁定时段列表，`start`/`end` 格式 `hh:mm` 或 `hh:mm:ss`，支持跨午夜 |
 
 跨午夜时段（如 `23:50` → `00:20`）总时长不得超过 1 小时。

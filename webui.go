@@ -70,11 +70,12 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 type configResponse struct {
-	Message     string       `json:"message"`
-	Speed       int          `json:"speed"`
-	Opacity     int          `json:"opacity"`
-	LockPeriods []lockPeriod `json:"lock_periods"`
-	AutoStart   bool         `json:"autostart"`
+	Message      string             `json:"message"`
+	Speed        int                `json:"speed"`
+	Opacity      int                `json:"opacity"`
+	LockPeriods  []lockPeriod       `json:"lock_periods"`
+	NetworkCheck networkCheckConfig `json:"network_check"`
+	AutoStart    bool               `json:"autostart"`
 }
 
 func handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -97,12 +98,18 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		if opacity < 1 || opacity > 255 {
 			opacity = 240
 		}
+		netCfg, err := normalizeNetworkCheckConfig(cfg.NetworkCheck)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
 		resp := configResponse{
-			Message:     cfg.Message,
-			Speed:       speed,
-			Opacity:     opacity,
-			LockPeriods: cfg.LockPeriods,
-			AutoStart:   isAutoStartEnabled(),
+			Message:      cfg.Message,
+			Speed:        speed,
+			Opacity:      opacity,
+			LockPeriods:  cfg.LockPeriods,
+			NetworkCheck: netCfg,
+			AutoStart:    isAutoStartEnabled(),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -120,11 +127,41 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		if !strings.Contains(string(body), "network_check") {
+			netCfg, err := normalizeNetworkCheckConfig(networkCheckConfigFile{})
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			req.NetworkCheck = netCfg
+		}
+		allowedCountries := normalizeCountryCodes(req.NetworkCheck.AllowedCountries)
+		if req.NetworkCheck.Enabled && len(allowedCountries) == 0 {
+			http.Error(w, "开启网络检查时至少选择一个允许国家/地区", 400)
+			return
+		}
+		providers := normalizeProviderIDs(req.NetworkCheck.Providers)
+		if req.NetworkCheck.Enabled && len(providers) < 2 {
+			http.Error(w, "开启网络检查时至少选择两个 IP 检查站点", 400)
+			return
+		}
+		forceTimes, _, err := normalizeForceDisconnectTimes(req.NetworkCheck.ForceDisconnectTimes)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		enabled := req.NetworkCheck.Enabled
 		cfg := configFile{
 			Message:     req.Message,
 			Speed:       req.Speed,
 			Opacity:     req.Opacity,
 			LockPeriods: req.LockPeriods,
+			NetworkCheck: networkCheckConfigFile{
+				Enabled:              &enabled,
+				AllowedCountries:     allowedCountries,
+				Providers:            providers,
+				ForceDisconnectTimes: forceTimes,
+			},
 		}
 		if cfg.Message == "" {
 			cfg.Message = "不熬夜！早点休息！"
@@ -162,6 +199,10 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 			"#\n# message: \u9501\u5c4f\u63d0\u793a\u8bed\n# speed: \u6587\u5b57\u79fb\u52a8\u901f\u5ea6 1-10 (\u9ed8\u8ba4 2)\n" +
 			"# opacity: \u906e\u7f69\u900f\u660e\u5ea6 1-255 (\u9ed8\u8ba4 240\uff0c\u8d8a\u5c0f\u8d8a\u900f\u660e)\n" +
 			"# lock_periods: \u9501\u5b9a\u65f6\u6bb5\u5217\u8868\uff0cstart/end: hh:mm \u6216 hh:mm:ss\n" +
+			"# network_check.enabled: \u662f\u5426\u542f\u7528\u516c\u7f51 IP \u5730\u533a\u68c0\u67e5\n" +
+			"# network_check.allowed_countries: \u5141\u8bb8\u7684 ISO 3166-1 alpha-2 \u56fd\u5bb6/\u5730\u533a\u7801\uff0c\u5982 SG/US/HK\n" +
+			"# network_check.providers: \u516c\u7f51 IP \u68c0\u67e5\u7ad9\u70b9\uff0c\u9ed8\u8ba4\u5168\u90e8\u542f\u7528\uff0c\u68c0\u6d4b\u65f6\u8f6e\u8be2\u4f7f\u7528\n" +
+			"# network_check.force_disconnect_times: \u5b9a\u70b9\u5f3a\u5236\u65ad\u7f51\u65f6\u523b\uff0c\u547d\u4e2d\u540e 3 \u5206\u949f\u5185\u963b\u6b62\u7f51\u7edc\u6062\u590d\n" +
 			"#   \u8de8\u5348\u591c\u65f6\u6bb5\u603b\u65f6\u957f\u4e0d\u5f97\u8d85\u8fc71\u5c0f\u65f6\uff0c\u4fee\u6539\u540e1\u5206\u949f\u5185\u81ea\u52a8\u751f\u6548\n\n" +
 			string(data))
 		tmpPath := configPath() + ".tmp"
@@ -250,6 +291,17 @@ input:focus{border-color:#a78bfa}
 .toggle .slider:before{content:'';position:absolute;height:20px;width:20px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
 .toggle input:checked+.slider{background:linear-gradient(135deg,#a78bfa,#f0abfc)}
 .toggle input:checked+.slider:before{transform:translateX(22px)}
+.country-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.provider-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:14px}
+.force-times{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+.country-option{display:flex;align-items:center;gap:8px;padding:9px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#cbd5e1;font-size:13px;cursor:pointer}
+.provider-option{display:flex;align-items:center;gap:8px;padding:9px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#cbd5e1;font-size:13px;cursor:pointer}
+.country-option input{accent-color:#a78bfa}
+.provider-option input{accent-color:#a78bfa}
+.country-option:has(input:checked){border-color:#a78bfa;background:rgba(167,139,250,0.16);color:#f5f3ff}
+.provider-option:has(input:checked){border-color:#a78bfa;background:rgba(167,139,250,0.16);color:#f5f3ff}
+.country-option.disabled{opacity:.45;cursor:not-allowed}
+.provider-option.disabled{opacity:.45;cursor:not-allowed}
 .btn-save{width:100%;padding:14px;border:none;border-radius:12px;background:linear-gradient(135deg,#a78bfa,#f0abfc);color:#1e1b4b;font-size:16px;font-weight:700;cursor:pointer;transition:transform .15s,box-shadow .15s;box-shadow:0 4px 20px rgba(167,139,250,0.3)}
 .btn-save:hover{transform:translateY(-2px);box-shadow:0 6px 28px rgba(167,139,250,0.5)}
 .btn-save:active{transform:translateY(0)}
@@ -305,6 +357,23 @@ input:focus{border-color:#a78bfa}
       </label>
     </div>
   </div>
+  <div class="card">
+    <div class="card-title"><span>🌐</span> 网络检查</div>
+    <div class="toggle-row">
+      <span style="font-size:13px;color:#94a3b8">公网 IP 地区不在允许列表时断开网络</span>
+      <label class="toggle">
+        <input type="checkbox" id="networkEnabled" onchange="renderNetworkOptions()">
+        <span class="slider"></span>
+      </label>
+    </div>
+    <label style="margin-top:16px">允许国家/地区（多选，英文缩写 + 中文）</label>
+    <div class="country-grid" id="countries"></div>
+    <label style="margin-top:16px">IP 检查站点（多选，默认全部）</label>
+    <div class="provider-grid" id="providers"></div>
+    <label style="margin-top:16px">定点断网提醒时刻</label>
+    <div class="force-times" id="forceTimes"></div>
+    <button class="btn-add" onclick="addForceTime()">+ 添加断网时刻</button>
+  </div>
   <button class="btn-save" onclick="saveConfig()">保存配置</button>
   <div class="footer">修改后无需重启，1 分钟内自动生效</div>
 </div>
@@ -323,6 +392,20 @@ makeStars();
 
 const $=id=>document.getElementById(id);
 let periods=[];
+let selectedCountries=['SG'];
+let selectedProviders=[];
+let forceTimes=[];
+const countryOptions=[
+  ['SG','新加坡'],['US','美国'],['HK','香港'],
+  ['JP','日本'],['TW','台湾'],['KR','韩国'],
+  ['GB','英国'],['DE','德国'],['NL','荷兰'],
+  ['CA','加拿大'],['AU','澳大利亚'],['FR','法国']
+];
+const providerOptions=[
+  ['ipinfo','ipinfo.io'],['ifconfig','ifconfig.co'],
+  ['ip-api','ip-api.com'],['ipapi','ipapi.co'],
+  ['ipwhois','ipwho.is']
+];
 
 function renderPeriods(){
   const c=$('periods');c.innerHTML='';
@@ -340,6 +423,61 @@ function addPeriod(start,end){
 }
 function removePeriod(i){periods.splice(i,1);renderPeriods()}
 
+function renderForceTimes(){
+  const c=$('forceTimes');c.innerHTML='';
+  forceTimes.forEach((t,i)=>{
+    const d=document.createElement('div');d.className='period-row';
+    d.innerHTML='<input type="time" value="'+t+'" onchange="forceTimes['+i+']=this.value">\
+<button class="btn-remove" onclick="removeForceTime('+i+')">×</button>';
+    c.appendChild(d);
+  });
+}
+function addForceTime(t){forceTimes.push(t||'23:30');renderForceTimes()}
+function removeForceTime(i){forceTimes.splice(i,1);renderForceTimes()}
+
+function renderNetworkOptions(){
+  renderCountries();
+  renderProviders();
+}
+
+function renderCountries(){
+  const c=$('countries');c.innerHTML='';
+  const enabled=$('networkEnabled').checked;
+  countryOptions.forEach(([code,name])=>{
+    const checked=selectedCountries.includes(code)?'checked':'';
+    const disabled=enabled?'':'disabled';
+    const l=document.createElement('label');
+    l.className='country-option '+(enabled?'':'disabled');
+    l.innerHTML='<input type="checkbox" value="'+code+'" '+checked+' '+disabled+' onchange="toggleCountry(this)"> <span>'+code+' '+name+'</span>';
+    c.appendChild(l);
+  });
+}
+
+function toggleCountry(el){
+  const code=el.value;
+  if(el.checked&&!selectedCountries.includes(code))selectedCountries.push(code);
+  if(!el.checked)selectedCountries=selectedCountries.filter(c=>c!==code);
+}
+
+function renderProviders(){
+  const c=$('providers');c.innerHTML='';
+  const enabled=$('networkEnabled').checked;
+  providerOptions.forEach(([id,name])=>{
+    const checked=selectedProviders.includes(id)?'checked':'';
+    const disabled=enabled?'':'disabled';
+    const l=document.createElement('label');
+    l.className='provider-option '+(enabled?'':'disabled');
+    l.innerHTML='<input type="checkbox" value="'+id+'" '+checked+' '+disabled+' onchange="toggleProvider(this)"> <span>'+id+' '+name+'</span>';
+    c.appendChild(l);
+  });
+}
+
+function toggleProvider(el){
+  const id=el.value;
+  if(el.checked&&!selectedProviders.includes(id))selectedProviders.push(id);
+  if(!el.checked)selectedProviders=selectedProviders.filter(p=>p!==id);
+}
+
 function toast(msg,ok){
   const t=$('toast');t.textContent=msg;t.className='toast '+(ok?'ok':'err')+' show';
   setTimeout(()=>t.className='toast',2500);
@@ -355,16 +493,31 @@ async function loadConfig(){
     $('speed').value=d.speed||2;$('speedVal').textContent=d.speed||2;
     $('opacity').value=d.opacity||240;$('opacityVal').textContent=d.opacity||240;
     $('autostart').checked=d.autostart||false;
+    const net=d.network_check||{enabled:true,allowed_countries:['SG']};
+    $('networkEnabled').checked=net.enabled!==false;
+    selectedCountries=(net.allowed_countries&&net.allowed_countries.length?net.allowed_countries:['SG']).map(c=>String(c).toUpperCase());
+    selectedProviders=(net.providers&&net.providers.length?net.providers:providerOptions.map(p=>p[0])).map(p=>String(p).toLowerCase());
+    forceTimes=(net.force_disconnect_times||[]).map(t=>String(t));
+    renderNetworkOptions();
+    renderForceTimes();
     periods=d.lock_periods||[];renderPeriods();
   }catch(e){toast('加载配置失败',false)}
 }
 
 async function saveConfig(){
+  if($('networkEnabled').checked&&selectedCountries.length===0){toast('请选择至少一个允许国家/地区',false);return}
+  if($('networkEnabled').checked&&selectedProviders.length<2){toast('请选择至少两个 IP 检查站点',false);return}
   const cfg={
     message:$('message').value,
     speed:parseInt($('speed').value),
     opacity:parseInt($('opacity').value),
-    lock_periods:periods.filter(p=>p.start&&p.end)
+    lock_periods:periods.filter(p=>p.start&&p.end),
+    network_check:{
+      enabled:$('networkEnabled').checked,
+      allowed_countries:selectedCountries,
+      providers:selectedProviders,
+      force_disconnect_times:forceTimes.filter(t=>t)
+    }
   };
   try{
     const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});

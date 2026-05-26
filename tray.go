@@ -1,9 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
-	"fmt"
 	"syscall"
 	"time"
 	"unsafe"
@@ -21,8 +21,9 @@ const (
 	WM_TRAYICON  = 0x0401 // WM_USER + 1
 	WM_RBUTTONUP = 0x0205
 
-	MF_STRING  = 0x00000000
-	MF_SEPARATOR = 0x00000800
+	MF_STRING     = 0x00000000
+	MF_GRAYED     = 0x00000001
+	MF_SEPARATOR  = 0x00000800
 	TPM_LEFTALIGN = 0x0000
 )
 
@@ -45,10 +46,10 @@ type NOTIFYICONDATAW struct {
 }
 
 type GdiplusStartupInput struct {
-	GdiplusVersion          uint32
-	DebugEventCallback      uintptr
+	GdiplusVersion           uint32
+	DebugEventCallback       uintptr
 	SuppressBackgroundThread int32
-	SuppressExternalCodecs  int32
+	SuppressExternalCodecs   int32
 }
 
 var (
@@ -62,14 +63,14 @@ var (
 	pDestroyMenu         = user32.NewProc("DestroyMenu")
 	pGetCursorPos        = user32.NewProc("GetCursorPos")
 	pSetForegroundWindow = user32.NewProc("SetForegroundWindow")
-	pPostMessage        = user32.NewProc("PostMessageW")
+	pPostMessage         = user32.NewProc("PostMessageW")
 
-	pGdiplusStartup         = gdiplus.NewProc("GdiplusStartup")
-	pGdiplusShutdown        = gdiplus.NewProc("GdiplusShutdown")
-	pGdipCreateBitmapFromFile = gdiplus.NewProc("GdipCreateBitmapFromFile")
+	pGdiplusStartup            = gdiplus.NewProc("GdiplusStartup")
+	pGdiplusShutdown           = gdiplus.NewProc("GdiplusShutdown")
+	pGdipCreateBitmapFromFile  = gdiplus.NewProc("GdipCreateBitmapFromFile")
 	pGdipCreateHICONFromBitmap = gdiplus.NewProc("GdipCreateHICONFromBitmap")
-	pGdipDisposeImage       = gdiplus.NewProc("GdipDisposeImage")
-	pDestroyIcon            = user32.NewProc("DestroyIcon")
+	pGdipDisposeImage          = gdiplus.NewProc("GdipDisposeImage")
+	pDestroyIcon               = user32.NewProc("DestroyIcon")
 )
 
 var gTrayIcon uintptr
@@ -170,6 +171,35 @@ func showTrayMenu(hwnd uintptr) {
 
 	ext, _ := syscall.UTF16PtrFromString(extendLabel)
 	pAppendMenuW.Call(menu, MF_STRING, 2, uintptr(unsafe.Pointer(ext)))
+
+	if gNetGuard != nil {
+		if remaining := gNetGuard.forceRemaining(time.Now()); remaining > 0 {
+			activeLabel := fmt.Sprintf("主动屏蔽网络中 (剩余 %s)", remaining)
+			active, _ := syscall.UTF16PtrFromString(activeLabel)
+			pAppendMenuW.Call(menu, MF_STRING|MF_GRAYED, 8, uintptr(unsafe.Pointer(active)))
+
+			cancel, _ := syscall.UTF16PtrFromString("取消主动屏蔽网络")
+			pAppendMenuW.Call(menu, MF_STRING, 9, uintptr(unsafe.Pointer(cancel)))
+
+			sepForce, _ := syscall.UTF16PtrFromString("-")
+			pAppendMenuW.Call(menu, MF_SEPARATOR, 0, uintptr(unsafe.Pointer(sepForce)))
+		}
+	}
+
+	net3, _ := syscall.UTF16PtrFromString("屏蔽网络检查 3 分钟")
+	pAppendMenuW.Call(menu, MF_STRING, 5, uintptr(unsafe.Pointer(net3)))
+
+	net5, _ := syscall.UTF16PtrFromString("屏蔽网络检查 5 分钟")
+	pAppendMenuW.Call(menu, MF_STRING, 6, uintptr(unsafe.Pointer(net5)))
+
+	net10Label := "屏蔽网络检查 10 分钟"
+	if gNetGuard != nil {
+		if remaining := gNetGuard.skipRemaining(time.Now()); remaining > 0 {
+			net10Label = fmt.Sprintf("屏蔽网络检查 10 分钟 (当前剩余 %s)", remaining)
+		}
+	}
+	net10, _ := syscall.UTF16PtrFromString(net10Label)
+	pAppendMenuW.Call(menu, MF_STRING, 7, uintptr(unsafe.Pointer(net10)))
 
 	sep, _ := syscall.UTF16PtrFromString("-")
 	pAppendMenuW.Call(menu, MF_SEPARATOR, 0, uintptr(unsafe.Pointer(sep)))
