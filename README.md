@@ -4,7 +4,13 @@
 
 定时锁屏工具 —— 强制自己按时睡觉，改掉熬夜坏习惯。
 
-Go 重写版，单 exe 部署，零外部依赖。原版 [SleepHook](https://github.com/jtuki/SleepHook)（C++/MFC）。
+Go 重写版，Windows 单 exe 部署，零外部依赖。原版 [SleepHook](https://github.com/jtuki/SleepHook)（C++/MFC）。
+
+## 平台支持
+
+目前仅支持 Windows。程序依赖 Windows API、系统托盘、低级键盘/鼠标钩子、任务管理器限制、网卡禁用和 Windows 消息框等能力，不能在 Linux/macOS 上直接运行。
+
+可以在 WSL、Linux 或 macOS 上交叉编译出 Windows 可执行文件，但生成的 `SleepHook.exe` 仍然只能在 Windows 上使用。
 
 ## 特性
 
@@ -64,10 +70,10 @@ lock_periods:
 
 跨午夜时段（如 `23:50` → `00:20`）总时长不得超过 1 小时。
 
-## 编译
+## 编译 Windows 版本
 
 ```bash
-# WSL / Linux / macOS 交叉编译
+# WSL / Linux / macOS 上交叉编译 Windows exe
 GOOS=windows GOARCH=amd64 go build -ldflags="-H windowsgui -s -w" -o SleepHook.exe
 ```
 
