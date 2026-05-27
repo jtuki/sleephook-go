@@ -141,8 +141,8 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		providers := normalizeProviderIDs(req.NetworkCheck.Providers)
-		if req.NetworkCheck.Enabled && len(providers) < 2 {
-			http.Error(w, "开启网络检查时至少选择两个 IP 检查站点", 400)
+		if req.NetworkCheck.Enabled && len(providers) == 0 {
+			http.Error(w, "开启网络检查时至少选择一个 IP 检查站点", 400)
 			return
 		}
 		forceTimes, _, err := normalizeForceDisconnectTimes(req.NetworkCheck.ForceDisconnectTimes)
@@ -201,8 +201,8 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 			"# lock_periods: \u9501\u5b9a\u65f6\u6bb5\u5217\u8868\uff0cstart/end: hh:mm \u6216 hh:mm:ss\n" +
 			"# network_check.enabled: \u662f\u5426\u542f\u7528\u516c\u7f51 IP \u5730\u533a\u68c0\u67e5\n" +
 			"# network_check.allowed_countries: \u5141\u8bb8\u7684 ISO 3166-1 alpha-2 \u56fd\u5bb6/\u5730\u533a\u7801\uff0c\u5982 SG/US/HK\n" +
-			"# network_check.providers: \u516c\u7f51 IP \u68c0\u67e5\u7ad9\u70b9\uff0c\u9ed8\u8ba4\u5168\u90e8\u542f\u7528\uff0c\u68c0\u6d4b\u65f6\u8f6e\u8be2\u4f7f\u7528\n" +
-			"# network_check.force_disconnect_times: \u5b9a\u70b9\u5f3a\u5236\u65ad\u7f51\u65f6\u523b\uff0c\u547d\u4e2d\u540e 3 \u5206\u949f\u5185\u963b\u6b62\u7f51\u7edc\u6062\u590d\n" +
+			"# network_check.providers: \u516c\u7f51 IP \u68c0\u67e5\u7ad9\u70b9\uff0c\u9ed8\u8ba4\u5168\u90e8\u542f\u7528\uff0c\u68c0\u6d4b\u65f6\u8f6e\u8be2\u4f7f\u7528\uff1b\u4efb\u4e00\u6210\u529f\u8fd4\u56de\u547d\u4e2d\u5141\u8bb8\u56fd\u5bb6/\u5730\u533a\u5373\u901a\u8fc7\n" +
+			"# network_check.force_disconnect_times: \u5b9a\u70b9\u5f3a\u5236\u65ad\u7f51\u65f6\u523b\uff0c\u786e\u8ba4\u6216\u8d85\u65f6\u540e 120 \u5206\u949f\u5185\u963b\u6b62\u7f51\u7edc\u6062\u590d\n" +
 			"#   \u8de8\u5348\u591c\u65f6\u6bb5\u603b\u65f6\u957f\u4e0d\u5f97\u8d85\u8fc71\u5c0f\u65f6\uff0c\u4fee\u6539\u540e1\u5206\u949f\u5185\u81ea\u52a8\u751f\u6548\n\n" +
 			string(data))
 		tmpPath := configPath() + ".tmp"
@@ -506,7 +506,7 @@ async function loadConfig(){
 
 async function saveConfig(){
   if($('networkEnabled').checked&&selectedCountries.length===0){toast('请选择至少一个允许国家/地区',false);return}
-  if($('networkEnabled').checked&&selectedProviders.length<2){toast('请选择至少两个 IP 检查站点',false);return}
+  if($('networkEnabled').checked&&selectedProviders.length===0){toast('请选择至少一个 IP 检查站点',false);return}
   const cfg={
     message:$('message').value,
     speed:parseInt($('speed').value),

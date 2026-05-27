@@ -407,7 +407,8 @@ func (g *networkGuard) runCheck() {
 			return
 		}
 		if err != nil {
-			logMsg("network check could not verify allowed public IP; disconnecting network")
+			logMsg("network check could not verify public IP; keeping network connected (%v)", err)
+			return
 		} else if ipChanged {
 			logMsg("network check detected changed disallowed public IP; disconnecting network")
 		} else {
@@ -453,8 +454,8 @@ func checkAllowedPublicIP(allowedCountries []string, endpoints []locationEndpoin
 	ctx, cancel := context.WithTimeout(context.Background(), networkCheckTimeout)
 	defer cancel()
 
-	if len(endpoints) < 2 {
-		return false, publicIPLocation{}, fmt.Errorf("at least 2 IP location providers are required for accurate verification")
+	if len(endpoints) == 0 {
+		return false, publicIPLocation{}, fmt.Errorf("at least 1 IP location provider is required")
 	}
 
 	var successes []publicIPLocation
@@ -469,7 +470,7 @@ func checkAllowedPublicIP(allowedCountries []string, endpoints []locationEndpoin
 			continue
 		}
 		successes = append(successes, loc)
-		if len(successes) >= 2 {
+		if locationAllowed(loc, allowedCountries) {
 			break
 		}
 	}
@@ -479,13 +480,10 @@ func checkAllowedPublicIP(allowedCountries []string, endpoints []locationEndpoin
 	}
 
 	loc := combineLocations(successes)
-	if !allLocationsAllowed(successes, allowedCountries) {
-		return false, loc, nil
+	if anyLocationAllowed(successes, allowedCountries) {
+		return true, loc, nil
 	}
-	if len(successes) < 2 {
-		return false, loc, fmt.Errorf("only one location provider succeeded; cannot verify accurately (%s)", loc.Source)
-	}
-	return true, loc, nil
+	return false, loc, nil
 }
 
 func combineLocations(locs []publicIPLocation) publicIPLocation {
@@ -526,17 +524,21 @@ func combineLocations(locs []publicIPLocation) publicIPLocation {
 	}
 }
 
-func allLocationsAllowed(locs []publicIPLocation, allowedCountries []string) bool {
+func anyLocationAllowed(locs []publicIPLocation, allowedCountries []string) bool {
+	for _, loc := range locs {
+		if locationAllowed(loc, allowedCountries) {
+			return true
+		}
+	}
+	return false
+}
+
+func locationAllowed(loc publicIPLocation, allowedCountries []string) bool {
 	allowed := make(map[string]bool)
 	for _, code := range allowedCountries {
 		allowed[strings.ToUpper(strings.TrimSpace(code))] = true
 	}
-	for _, loc := range locs {
-		if !allowed[strings.ToUpper(loc.CountryCode)] {
-			return false
-		}
-	}
-	return true
+	return allowed[strings.ToUpper(strings.TrimSpace(loc.CountryCode))]
 }
 
 func normalizeProviderIDs(ids []string) []string {
