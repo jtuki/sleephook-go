@@ -174,11 +174,11 @@ func showTrayMenu(hwnd uintptr) {
 
 	if gNetGuard != nil {
 		if remaining := gNetGuard.forceRemaining(time.Now()); remaining > 0 {
-			activeLabel := fmt.Sprintf("主动屏蔽网络中 (剩余 %s)", remaining)
+			activeLabel := fmt.Sprintf("网络处置中 (剩余 %s)", remaining)
 			active, _ := syscall.UTF16PtrFromString(activeLabel)
 			pAppendMenuW.Call(menu, MF_STRING|MF_GRAYED, 8, uintptr(unsafe.Pointer(active)))
 
-			cancel, _ := syscall.UTF16PtrFromString("取消主动屏蔽网络")
+			cancel, _ := syscall.UTF16PtrFromString("取消网络处置")
 			pAppendMenuW.Call(menu, MF_STRING, 9, uintptr(unsafe.Pointer(cancel)))
 
 			sepForce, _ := syscall.UTF16PtrFromString("-")

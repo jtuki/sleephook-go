@@ -11,12 +11,14 @@ speed: 2
 opacity: 240
 
 # Public IP region guard.
-# enabled: true means disconnect Windows network when successful provider
+# enabled: true means run configured actions when successful provider
 # responses do not include any country/region in allowed_countries.
 # allowed_countries uses ISO 3166-1 alpha-2 country/region codes.
 # providers defaults to all supported IP lookup sites; checks use them in
 # round-robin order. Any successful allowed-country response passes the check;
 # timeout or failed provider calls do not count as matches.
+# actions defaults to disconnect for old configs. Use one powershell action to
+# run a custom script instead, such as shutting down WSL without disabling networking.
 network_check:
   enabled: true
   allowed_countries:
@@ -27,9 +29,12 @@ network_check:
     - "ip-api"
     - "ipapi"
     - "ipwhois"
+  actions:
+    - type: "powershell"
+      script: "wsl --shutdown"
   # At these times, show a prompt first. If the user confirms or does not
-  # respond within 30 seconds, disconnect and enforce disconnects for 120 minutes.
-  # If the user chooses manual disconnect, this scheduled slot is not enforced.
+  # respond within 30 seconds, run actions and keep enforcing them for 120 minutes.
+  # If the user chooses manual handling, this scheduled slot is not enforced.
   force_disconnect_times: []
 
 # lock_periods: list of time ranges to lock the screen.

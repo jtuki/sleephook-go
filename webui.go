@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +25,8 @@ var (
 	pShellExecuteW = shell32.NewProc("ShellExecuteW")
 	webOnce        sync.Once
 	webURL         string
+	webHost        string
+	webToken       string
 	webSrv         *http.Server
 )
 
@@ -33,7 +38,15 @@ func startWebUIServer() {
 			logMsg("webui: listen failed: %v", err)
 			return
 		}
-		webURL = fmt.Sprintf("http://%s", listener.Addr())
+		webHost = listener.Addr().String()
+		var tokenErr error
+		webToken, tokenErr = newWebToken()
+		if tokenErr != nil {
+			listener.Close()
+			logMsg("webui: token generation failed: %v", tokenErr)
+			return
+		}
+		webURL = fmt.Sprintf("http://%s/?token=%s", webHost, webToken)
 
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", serveIndex)
@@ -42,7 +55,7 @@ func startWebUIServer() {
 
 		webSrv = &http.Server{Handler: mux}
 		go webSrv.Serve(listener)
-		logMsg("webui: listening on %s", webURL)
+		logMsg("webui: listening on http://%s", webHost)
 	})
 }
 
@@ -64,6 +77,14 @@ func stopWebUI() {
 	}
 }
 
+func newWebToken() (string, error) {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
 func serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	io.WriteString(w, indexHTML)
@@ -79,6 +100,9 @@ type configResponse struct {
 }
 
 func handleConfig(w http.ResponseWriter, r *http.Request) {
+	if !validAPIRequest(w, r) {
+		return
+	}
 	if r.Method == http.MethodGet {
 		data, err := os.ReadFile(configPath())
 		if err != nil {
@@ -117,6 +141,10 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
+		if !strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+			http.Error(w, "content-type must be application/json", 415)
+			return
+		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -150,6 +178,18 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		actionsIn := make([]networkActionConfigFile, 0, len(req.NetworkCheck.Actions))
+		for _, action := range req.NetworkCheck.Actions {
+			actionsIn = append(actionsIn, networkActionConfigFile{
+				Type:   action.Type,
+				Script: action.Script,
+			})
+		}
+		actions, err := normalizeNetworkActions(actionsIn)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
 		enabled := req.NetworkCheck.Enabled
 		cfg := configFile{
 			Message:     req.Message,
@@ -160,6 +200,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 				Enabled:              &enabled,
 				AllowedCountries:     allowedCountries,
 				Providers:            providers,
+				Actions:              actionsToConfigFile(actions),
 				ForceDisconnectTimes: forceTimes,
 			},
 		}
@@ -202,7 +243,8 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 			"# network_check.enabled: \u662f\u5426\u542f\u7528\u516c\u7f51 IP \u5730\u533a\u68c0\u67e5\n" +
 			"# network_check.allowed_countries: \u5141\u8bb8\u7684 ISO 3166-1 alpha-2 \u56fd\u5bb6/\u5730\u533a\u7801\uff0c\u5982 SG/US/HK\n" +
 			"# network_check.providers: \u516c\u7f51 IP \u68c0\u67e5\u7ad9\u70b9\uff0c\u9ed8\u8ba4\u5168\u90e8\u542f\u7528\uff0c\u68c0\u6d4b\u65f6\u8f6e\u8be2\u4f7f\u7528\uff1b\u4efb\u4e00\u6210\u529f\u8fd4\u56de\u547d\u4e2d\u5141\u8bb8\u56fd\u5bb6/\u5730\u533a\u5373\u901a\u8fc7\n" +
-			"# network_check.force_disconnect_times: \u5b9a\u70b9\u5f3a\u5236\u65ad\u7f51\u65f6\u523b\uff0c\u786e\u8ba4\u6216\u8d85\u65f6\u540e 120 \u5206\u949f\u5185\u963b\u6b62\u7f51\u7edc\u6062\u590d\n" +
+			"# network_check.actions: \u516c\u7f51 IP \u4e0d\u5728\u5141\u8bb8\u5217\u8868\u65f6\u6267\u884c\u7684\u52a8\u4f5c\uff1b\u9ed8\u8ba4 disconnect\uff0c\u53ef\u9009 powershell script\n" +
+			"# network_check.force_disconnect_times: \u5b9a\u70b9\u6267\u884c\u7f51\u7edc\u5904\u7f6e\u52a8\u4f5c\u7684\u65f6\u523b\uff0c\u786e\u8ba4\u6216\u8d85\u65f6\u540e 120 \u5206\u949f\u5185\u6301\u7eed\u6267\u884c\n" +
 			"#   \u8de8\u5348\u591c\u65f6\u6bb5\u603b\u65f6\u957f\u4e0d\u5f97\u8d85\u8fc71\u5c0f\u65f6\uff0c\u4fee\u6539\u540e1\u5206\u949f\u5185\u81ea\u52a8\u751f\u6548\n\n" +
 			string(data))
 		tmpPath := configPath() + ".tmp"
@@ -223,7 +265,44 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func validAPIRequest(w http.ResponseWriter, r *http.Request) bool {
+	if webHost == "" || r.Host != webHost {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		token = r.Header.Get("X-SleepHook-Token")
+	}
+	if webToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(webToken)) != 1 {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	if r.Method != http.MethodGet {
+		origin := r.Header.Get("Origin")
+		if origin != "" && origin != "http://"+webHost {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return false
+		}
+	}
+	return true
+}
+
+func actionsToConfigFile(actions []networkActionConfig) []networkActionConfigFile {
+	out := make([]networkActionConfigFile, 0, len(actions))
+	for _, action := range actions {
+		out = append(out, networkActionConfigFile{
+			Type:   action.Type,
+			Script: action.Script,
+		})
+	}
+	return out
+}
+
 func handleAutostart(w http.ResponseWriter, r *http.Request) {
+	if !validAPIRequest(w, r) {
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", 405)
 		return
@@ -267,10 +346,11 @@ body{
 .card-title{font-size:15px;font-weight:600;color:#c4b5fd;margin-bottom:16px;display:flex;align-items:center;gap:8px}
 .card-title span{font-size:18px}
 label{display:block;font-size:13px;color:#94a3b8;margin-bottom:6px}
-input[type=text],input[type=time]{
+input[type=text],input[type=time],textarea{
   width:100%;padding:10px 14px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);
   border-radius:10px;color:#e2e8f0;font-size:14px;outline:none;transition:border .2s;
 }
+textarea{min-height:86px;resize:vertical;font-family:"Cascadia Code","Consolas",monospace;line-height:1.4}
 input:focus{border-color:#a78bfa}
 .range-row{display:flex;align-items:center;gap:12px}
 .range-row input[type=range]{flex:1;-webkit-appearance:none;height:6px;background:rgba(255,255,255,0.15);border-radius:3px;outline:none}
@@ -296,10 +376,13 @@ input:focus{border-color:#a78bfa}
 .force-times{display:flex;flex-direction:column;gap:10px;margin-top:14px}
 .country-option{display:flex;align-items:center;gap:8px;padding:9px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#cbd5e1;font-size:13px;cursor:pointer}
 .provider-option{display:flex;align-items:center;gap:8px;padding:9px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#cbd5e1;font-size:13px;cursor:pointer}
+.action-option{display:flex;align-items:center;gap:8px;padding:9px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#cbd5e1;font-size:13px;cursor:pointer;margin-top:14px}
 .country-option input{accent-color:#a78bfa}
 .provider-option input{accent-color:#a78bfa}
+.action-option input{accent-color:#a78bfa}
 .country-option:has(input:checked){border-color:#a78bfa;background:rgba(167,139,250,0.16);color:#f5f3ff}
 .provider-option:has(input:checked){border-color:#a78bfa;background:rgba(167,139,250,0.16);color:#f5f3ff}
+.action-option:has(input:checked){border-color:#a78bfa;background:rgba(167,139,250,0.16);color:#f5f3ff}
 .country-option.disabled{opacity:.45;cursor:not-allowed}
 .provider-option.disabled{opacity:.45;cursor:not-allowed}
 .btn-save{width:100%;padding:14px;border:none;border-radius:12px;background:linear-gradient(135deg,#a78bfa,#f0abfc);color:#1e1b4b;font-size:16px;font-weight:700;cursor:pointer;transition:transform .15s,box-shadow .15s;box-shadow:0 4px 20px rgba(167,139,250,0.3)}
@@ -360,7 +443,7 @@ input:focus{border-color:#a78bfa}
   <div class="card">
     <div class="card-title"><span>🌐</span> 网络检查</div>
     <div class="toggle-row">
-      <span style="font-size:13px;color:#94a3b8">公网 IP 地区不在允许列表时断开网络</span>
+      <span style="font-size:13px;color:#94a3b8">公网 IP 地区不在允许列表时执行处置动作</span>
       <label class="toggle">
         <input type="checkbox" id="networkEnabled" onchange="renderNetworkOptions()">
         <span class="slider"></span>
@@ -370,9 +453,16 @@ input:focus{border-color:#a78bfa}
     <div class="country-grid" id="countries"></div>
     <label style="margin-top:16px">IP 检查站点（多选，默认全部）</label>
     <div class="provider-grid" id="providers"></div>
-    <label style="margin-top:16px">定点断网提醒时刻</label>
+    <label style="margin-top:16px">网络处置动作</label>
+    <label class="action-option">
+      <input type="checkbox" id="actionDisconnect">
+      <span>断开 Windows 网络</span>
+    </label>
+    <label style="margin-top:14px">PowerShell 脚本（留空则不执行）</label>
+    <textarea id="actionPowerShell" placeholder="wsl --shutdown"></textarea>
+    <label style="margin-top:16px">定点网络处置提醒时刻</label>
     <div class="force-times" id="forceTimes"></div>
-    <button class="btn-add" onclick="addForceTime()">+ 添加断网时刻</button>
+    <button class="btn-add" onclick="addForceTime()">+ 添加处置时刻</button>
   </div>
   <button class="btn-save" onclick="saveConfig()">保存配置</button>
   <div class="footer">修改后无需重启，1 分钟内自动生效</div>
@@ -391,10 +481,13 @@ function makeStars(){
 makeStars();
 
 const $=id=>document.getElementById(id);
+const apiToken=new URLSearchParams(location.search).get('token')||'';
+const apiPath=p=>p+(p.includes('?')?'&':'?')+'token='+encodeURIComponent(apiToken);
 let periods=[];
 let selectedCountries=['SG'];
 let selectedProviders=[];
 let forceTimes=[];
+let networkActions=[{type:'disconnect'}];
 const countryOptions=[
   ['SG','新加坡'],['US','美国'],['HK','香港'],
   ['JP','日本'],['TW','台湾'],['KR','韩国'],
@@ -488,7 +581,7 @@ $('opacity').oninput=function(){$('opacityVal').textContent=this.value};
 
 async function loadConfig(){
   try{
-    const r=await fetch('/api/config');const d=await r.json();
+    const r=await fetch(apiPath('/api/config'));const d=await r.json();
     $('message').value=d.message||'';
     $('speed').value=d.speed||2;$('speedVal').textContent=d.speed||2;
     $('opacity').value=d.opacity||240;$('opacityVal').textContent=d.opacity||240;
@@ -497,6 +590,10 @@ async function loadConfig(){
     $('networkEnabled').checked=net.enabled!==false;
     selectedCountries=(net.allowed_countries&&net.allowed_countries.length?net.allowed_countries:['SG']).map(c=>String(c).toUpperCase());
     selectedProviders=(net.providers&&net.providers.length?net.providers:providerOptions.map(p=>p[0])).map(p=>String(p).toLowerCase());
+    networkActions=(net.actions&&net.actions.length?net.actions:[{type:'disconnect'}]);
+    $('actionDisconnect').checked=networkActions.some(a=>String(a.type).toLowerCase()==='disconnect'||String(a.type).toLowerCase()==='disconnect_windows_network');
+    const ps=networkActions.find(a=>String(a.type).toLowerCase()==='powershell');
+    $('actionPowerShell').value=ps&&ps.script?ps.script:'';
     forceTimes=(net.force_disconnect_times||[]).map(t=>String(t));
     renderNetworkOptions();
     renderForceTimes();
@@ -507,6 +604,11 @@ async function loadConfig(){
 async function saveConfig(){
   if($('networkEnabled').checked&&selectedCountries.length===0){toast('请选择至少一个允许国家/地区',false);return}
   if($('networkEnabled').checked&&selectedProviders.length===0){toast('请选择至少一个 IP 检查站点',false);return}
+  const actions=[];
+  if($('actionDisconnect').checked)actions.push({type:'disconnect'});
+  const ps=$('actionPowerShell').value.trim();
+  if(ps)actions.push({type:'powershell',script:ps});
+  if($('networkEnabled').checked&&actions.length===0){toast('请至少选择一个网络处置动作',false);return}
   const cfg={
     message:$('message').value,
     speed:parseInt($('speed').value),
@@ -516,14 +618,15 @@ async function saveConfig(){
       enabled:$('networkEnabled').checked,
       allowed_countries:selectedCountries,
       providers:selectedProviders,
+      actions:actions,
       force_disconnect_times:forceTimes.filter(t=>t)
     }
   };
   try{
-    const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+    const r=await fetch(apiPath('/api/config'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
     if(!r.ok){const t=await r.text();toast(t,false);return}
     const as=$('autostart').checked;
-    await fetch('/api/autostart',{method:'POST',body:as?'true':'false'});
+    await fetch(apiPath('/api/autostart'),{method:'POST',body:as?'true':'false'});
     toast('已保存 ✓',true);
   }catch(e){toast('保存失败',false)}
 }

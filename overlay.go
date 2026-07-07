@@ -488,9 +488,9 @@ func showError(text string) {
 }
 
 func confirmScheduledDisconnect(timeout time.Duration) bool {
-	text := "已到定点断网时刻。\n\n选择“是”：立即断网，并在接下来的 120 分钟阻止网络恢复。\n选择“否”：我会手动断网，本次不再强制。\n\n30 秒无操作将自动断网。"
+	text := "已到定点网络处置时刻。\n\n选择“是”：立即执行配置的网络处置动作，并在接下来的 120 分钟持续执行。\n选择“否”：我会手动处理，本次不再强制。\n\n30 秒无操作将自动执行。"
 	t, _ := syscall.UTF16PtrFromString(text)
-	title, _ := syscall.UTF16PtrFromString("SleepHook 定点断网")
+	title, _ := syscall.UTF16PtrFromString("SleepHook 定点网络处置")
 	flags := uintptr(MB_YESNO | MB_ICONWARNING | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST)
 	ret, _, err := pMessageBoxTimeoutW.Call(
 		0,
@@ -501,7 +501,7 @@ func confirmScheduledDisconnect(timeout time.Duration) bool {
 		uintptr(timeout/time.Millisecond),
 	)
 	if ret == 0 {
-		logMsg("scheduled disconnect prompt failed or timed out without result: %v", err)
+		logMsg("scheduled network action prompt failed or timed out without result: %v", err)
 		return true
 	}
 	return ret != IDNO

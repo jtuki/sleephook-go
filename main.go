@@ -62,9 +62,9 @@ func main() {
 			tr.StopSec/3600, tr.StopSec%3600/60,
 			kind, hours)
 	}
-	logMsg("message: %s speed: %d opacity: %d network_check=%v allowed=%v providers=%v force_times=%v",
+	logMsg("message: %s speed: %d opacity: %d network_check=%v allowed=%v providers=%v actions=%v force_times=%v",
 		gMessage, gSpeedVal, gOpacityVal, gNetworkCfg.Enabled, gNetworkCfg.AllowedCountries,
-		gNetworkCfg.Providers, gNetworkCfg.ForceDisconnectTimes)
+		gNetworkCfg.Providers, networkActionLabels(gNetworkCfg.Actions), gNetworkCfg.ForceDisconnectTimes)
 	gLastReload = time.Now()
 	gOpacity = byte(gOpacityVal)
 
@@ -130,7 +130,7 @@ func updateTooltip() {
 	}
 	if gNetGuard != nil {
 		if remaining := gNetGuard.forceRemaining(now); remaining > 0 {
-			updateTrayTooltip(gHwnd, fmt.Sprintf("SleepHook - 主动屏蔽网络中 (剩余 %s)", remaining))
+			updateTrayTooltip(gHwnd, fmt.Sprintf("SleepHook - 网络处置中 (剩余 %s)", remaining))
 			return
 		}
 		if remaining := gNetGuard.skipRemaining(now); remaining > 0 {
@@ -175,9 +175,9 @@ func checkAndToggle() {
 			if gNetGuard != nil {
 				gNetGuard.configure(netCfg)
 			}
-			logMsg("config reloaded: %d periods, message=%q speed=%d opacity=%d network_check=%v allowed=%v providers=%v force_times=%v",
+			logMsg("config reloaded: %d periods, message=%q speed=%d opacity=%d network_check=%v allowed=%v providers=%v actions=%v force_times=%v",
 				len(gCfg), gMessage, speed, opacity, netCfg.Enabled, netCfg.AllowedCountries,
-				netCfg.Providers, netCfg.ForceDisconnectTimes)
+				netCfg.Providers, networkActionLabels(netCfg.Actions), netCfg.ForceDisconnectTimes)
 		} else if err != nil {
 			logMsg("config reload failed: %v", err)
 		}

@@ -25,18 +25,30 @@ type lockPeriod struct {
 }
 
 type networkCheckConfigFile struct {
-	Enabled              *bool    `yaml:"enabled" json:"enabled"`
-	AllowedCountries     []string `yaml:"allowed_countries" json:"allowed_countries"`
-	Providers            []string `yaml:"providers" json:"providers"`
-	ForceDisconnectTimes []string `yaml:"force_disconnect_times" json:"force_disconnect_times"`
+	Enabled              *bool                     `yaml:"enabled" json:"enabled"`
+	AllowedCountries     []string                  `yaml:"allowed_countries" json:"allowed_countries"`
+	Providers            []string                  `yaml:"providers" json:"providers"`
+	Actions              []networkActionConfigFile `yaml:"actions" json:"actions"`
+	ForceDisconnectTimes []string                  `yaml:"force_disconnect_times" json:"force_disconnect_times"`
 }
 
 type networkCheckConfig struct {
-	Enabled              bool     `json:"enabled"`
-	AllowedCountries     []string `json:"allowed_countries"`
-	Providers            []string `json:"providers"`
-	ForceDisconnectTimes []string `json:"force_disconnect_times"`
-	ForceDisconnectSecs  []int    `json:"-" yaml:"-"`
+	Enabled              bool                  `json:"enabled"`
+	AllowedCountries     []string              `json:"allowed_countries"`
+	Providers            []string              `json:"providers"`
+	Actions              []networkActionConfig `json:"actions"`
+	ForceDisconnectTimes []string              `json:"force_disconnect_times"`
+	ForceDisconnectSecs  []int                 `json:"-" yaml:"-"`
+}
+
+type networkActionConfigFile struct {
+	Type   string `yaml:"type" json:"type"`
+	Script string `yaml:"script,omitempty" json:"script,omitempty"`
+}
+
+type networkActionConfig struct {
+	Type   string `json:"type"`
+	Script string `json:"script,omitempty"`
 }
 
 // TimeRange represents a lock period as seconds since midnight.
@@ -112,6 +124,10 @@ func normalizeNetworkCheckConfig(cfg networkCheckConfigFile) (networkCheckConfig
 		allowed = []string{"SG"}
 	}
 	providers := normalizeProviderIDs(cfg.Providers)
+	actions, err := normalizeNetworkActions(cfg.Actions)
+	if err != nil {
+		return networkCheckConfig{}, err
+	}
 	forceTimes, forceSecs, err := normalizeForceDisconnectTimes(cfg.ForceDisconnectTimes)
 	if err != nil {
 		return networkCheckConfig{}, err
@@ -121,9 +137,57 @@ func normalizeNetworkCheckConfig(cfg networkCheckConfigFile) (networkCheckConfig
 		Enabled:              enabled,
 		AllowedCountries:     allowed,
 		Providers:            providers,
+		Actions:              actions,
 		ForceDisconnectTimes: forceTimes,
 		ForceDisconnectSecs:  forceSecs,
 	}, nil
+}
+
+const (
+	networkActionDisconnect = "disconnect"
+	networkActionPowerShell = "powershell"
+)
+
+func normalizeNetworkActions(actions []networkActionConfigFile) ([]networkActionConfig, error) {
+	if len(actions) == 0 {
+		return defaultNetworkActions(), nil
+	}
+
+	hasDisconnect := false
+	powerShellScript := ""
+	for i, action := range actions {
+		actionType := strings.ToLower(strings.TrimSpace(action.Type))
+		switch actionType {
+		case networkActionDisconnect, "disconnect_windows_network":
+			if hasDisconnect {
+				return nil, fmt.Errorf("network_check.actions[%d].type: duplicate disconnect action", i)
+			}
+			hasDisconnect = true
+		case networkActionPowerShell:
+			if powerShellScript != "" {
+				return nil, fmt.Errorf("network_check.actions[%d].type: duplicate powershell action", i)
+			}
+			script := strings.TrimSpace(action.Script)
+			if script == "" {
+				return nil, fmt.Errorf("network_check.actions[%d].script: powershell action requires a script", i)
+			}
+			powerShellScript = script
+		default:
+			return nil, fmt.Errorf("network_check.actions[%d].type: unsupported action %q (use disconnect or powershell)", i, action.Type)
+		}
+	}
+	out := make([]networkActionConfig, 0, 2)
+	if hasDisconnect {
+		out = append(out, networkActionConfig{Type: networkActionDisconnect})
+	}
+	if powerShellScript != "" {
+		out = append(out, networkActionConfig{Type: networkActionPowerShell, Script: powerShellScript})
+	}
+	return out, nil
+}
+
+func defaultNetworkActions() []networkActionConfig {
+	return []networkActionConfig{{Type: networkActionDisconnect}}
 }
 
 func normalizeCountryCodes(codes []string) []string {

@@ -22,6 +22,7 @@ const (
 	forcePromptTimeout      = 30 * time.Second
 	networkRecheckDelay     = 3 * time.Second
 	networkCheckTimeout     = 8 * time.Second
+	networkActionTimeout    = 30 * time.Second
 	disconnectRetryCooldown = 15 * time.Second
 )
 
@@ -30,6 +31,7 @@ type networkGuard struct {
 	enabled          bool
 	allowedCountries []string
 	providers        []string
+	actions          []networkActionConfig
 	forceTimes       []int
 	providerCursor   int
 	nextCheck        time.Time
@@ -47,6 +49,7 @@ type networkGuard struct {
 	localIPsKnown    bool
 	forceDisconnect  bool
 	lastDisconnect   time.Time
+	actionRunning    bool
 }
 
 type publicIPLocation struct {
@@ -83,16 +86,22 @@ func (g *networkGuard) configure(cfg networkCheckConfig) {
 		allowed = []string{"SG"}
 	}
 	providers := normalizeProviderIDs(cfg.Providers)
+	actions := copyNetworkActions(cfg.Actions)
+	if len(actions) == 0 {
+		actions = defaultNetworkActions()
+	}
 	forceTimes := append([]int(nil), cfg.ForceDisconnectSecs...)
 
 	g.mu.Lock()
 	changed := g.enabled != cfg.Enabled ||
 		strings.Join(g.allowedCountries, ",") != strings.Join(allowed, ",") ||
 		strings.Join(g.providers, ",") != strings.Join(providers, ",") ||
+		actionsKey(g.actions) != actionsKey(actions) ||
 		intsKey(g.forceTimes) != intsKey(forceTimes)
 	g.enabled = cfg.Enabled
 	g.allowedCountries = allowed
 	g.providers = providers
+	g.actions = actions
 	g.forceTimes = forceTimes
 	if changed {
 		g.nextCheck = time.Time{}
@@ -137,7 +146,7 @@ func (g *networkGuard) cancelActiveBlock() {
 	g.forceDisconnect = false
 	g.mu.Unlock()
 	if wasActive {
-		logMsg("scheduled force disconnect canceled from tray menu")
+		logMsg("scheduled network action canceled from tray menu")
 	}
 	updateTooltip()
 }
@@ -208,9 +217,9 @@ func (g *networkGuard) tick(now time.Time) {
 		return
 	}
 	if forceActive {
-		reason := "scheduled force-disconnect window"
+		reason := "scheduled network-action window"
 		if forceTriggered {
-			reason = "scheduled force-disconnect trigger"
+			reason = "scheduled network-action trigger"
 		}
 		go g.enforceScheduledDisconnect(forceUrgent, reason)
 		return
@@ -254,7 +263,7 @@ func (g *networkGuard) updateForceDisconnectLocked(now time.Time) (bool, bool, b
 	g.forcePrompting = true
 	g.nextForceAttempt = time.Time{}
 	g.nextCheck = time.Time{}
-	return true, false, false, fmt.Sprintf("scheduled force disconnect prompt triggered at %s", now.Format("15:04:05"))
+	return true, false, false, fmt.Sprintf("scheduled network action prompt triggered at %s", now.Format("15:04:05"))
 }
 
 func (g *networkGuard) promptScheduledDisconnect(triggeredAt time.Time) {
@@ -268,7 +277,7 @@ func (g *networkGuard) promptScheduledDisconnect(triggeredAt time.Time) {
 		g.forceDisconnect = false
 		g.nextForceAttempt = time.Time{}
 		g.mu.Unlock()
-		logMsg("scheduled force disconnect prompt ignored because network check is disabled")
+		logMsg("scheduled network action prompt ignored because network check is disabled")
 		return
 	}
 	g.forcePrompting = false
@@ -277,19 +286,19 @@ func (g *networkGuard) promptScheduledDisconnect(triggeredAt time.Time) {
 		g.forceDisconnect = false
 		g.nextForceAttempt = time.Time{}
 		g.mu.Unlock()
-		logMsg("scheduled force disconnect at %s dismissed; user chose manual disconnect", triggeredAt.Format("15:04:05"))
+		logMsg("scheduled network action at %s dismissed; user chose manual handling", triggeredAt.Format("15:04:05"))
 		return
 	}
 
 	g.forceUntil = now.Add(forceDisconnectDuration)
 	g.forceDisconnect = true
-	g.nextForceAttempt = time.Time{}
+	g.nextForceAttempt = now.Add(disconnectRetryCooldown)
 	g.nextCheck = time.Time{}
 	until := g.forceUntil
 	g.mu.Unlock()
 
-	logMsg("scheduled force disconnect confirmed or timed out; enforcing until %s", until.Format("15:04:05"))
-	g.enforceScheduledDisconnect(true, "scheduled force-disconnect prompt")
+	logMsg("scheduled network action confirmed or timed out; enforcing until %s", until.Format("15:04:05"))
+	g.enforceScheduledDisconnect(true, "scheduled network-action prompt")
 }
 
 func (g *networkGuard) enforceScheduledDisconnect(urgent bool, reason string) {
@@ -300,7 +309,7 @@ func (g *networkGuard) enforceScheduledDisconnect(urgent bool, reason string) {
 	}
 	g.mu.Unlock()
 
-	if err := g.disconnectWindowsNetwork(urgent); err != nil {
+	if err := g.runConfiguredNetworkActions(urgent); err != nil {
 		logMsg("%s failed: %v", reason, err)
 	}
 }
@@ -338,7 +347,7 @@ func (g *networkGuard) scanLocalIPs() {
 	g.lastLocalLog = time.Now()
 	if g.forceUntil.After(time.Now()) {
 		g.nextForceAttempt = time.Time{}
-		logMsg("local IP fingerprint changed: %s -> %s; enforcing scheduled disconnect",
+		logMsg("local IP fingerprint changed: %s -> %s; enforcing scheduled network action",
 			displayFingerprint(prev), displayFingerprint(fingerprint))
 		return
 	}
@@ -399,23 +408,23 @@ func (g *networkGuard) runCheck() {
 	if !ok {
 		enabled, _, _ := g.snapshot()
 		if !enabled {
-			logMsg("network check would disconnect but checking is disabled (location=%s)", info)
+			logMsg("network check would run actions but checking is disabled (location=%s)", info)
 			return
 		}
 		if skipActive {
-			logMsg("network check would disconnect but skip is active (location=%s)", info)
+			logMsg("network check would run actions but skip is active (location=%s)", info)
 			return
 		}
 		if err != nil {
 			logMsg("network check could not verify public IP; keeping network connected (%v)", err)
 			return
 		} else if ipChanged {
-			logMsg("network check detected changed disallowed public IP; disconnecting network")
+			logMsg("network check detected changed disallowed public IP; running configured actions")
 		} else {
-			logMsg("network check detected disallowed public IP; disconnecting network (location=%s)", info)
+			logMsg("network check detected disallowed public IP; running configured actions (location=%s)", info)
 		}
-		if err := g.disconnectWindowsNetwork(ipChanged || forceDisconnect); err != nil {
-			logMsg("network disconnect failed: %v", err)
+		if err := g.runConfiguredNetworkActions(ipChanged || forceDisconnect); err != nil {
+			logMsg("network action failed: %v", err)
 		}
 	}
 }
@@ -609,6 +618,22 @@ func intsKey(values []int) string {
 	return fmt.Sprint(values)
 }
 
+func actionsKey(actions []networkActionConfig) string {
+	parts := make([]string, 0, len(actions))
+	for _, action := range actions {
+		parts = append(parts, action.Type+"\x00"+action.Script)
+	}
+	return strings.Join(parts, "\x01")
+}
+
+func networkActionLabels(actions []networkActionConfig) []string {
+	labels := make([]string, 0, len(actions))
+	for _, action := range actions {
+		labels = append(labels, action.Type)
+	}
+	return labels
+}
+
 func fetchPublicIPLocation(ctx context.Context, ep locationEndpoint) (publicIPLocation, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.url, nil)
 	if err != nil {
@@ -739,22 +764,66 @@ func firstString(raw map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-func (g *networkGuard) disconnectWindowsNetwork(urgent bool) error {
+func (g *networkGuard) runConfiguredNetworkActions(urgent bool) error {
 	g.mu.Lock()
 	if !urgent && !g.lastDisconnect.IsZero() && time.Since(g.lastDisconnect) < disconnectRetryCooldown {
 		g.mu.Unlock()
 		return nil
 	}
+	if g.actionRunning {
+		g.mu.Unlock()
+		return nil
+	}
+	actions := copyNetworkActions(g.actions)
+	if len(actions) == 0 {
+		actions = defaultNetworkActions()
+	}
 	g.lastDisconnect = time.Now()
 	g.forceDisconnect = false
+	g.actionRunning = true
 	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		g.actionRunning = false
+		g.mu.Unlock()
+	}()
 
-	return disconnectWindowsNetwork()
+	return runNetworkActions(actions)
+}
+
+func copyNetworkActions(actions []networkActionConfig) []networkActionConfig {
+	out := make([]networkActionConfig, len(actions))
+	copy(out, actions)
+	return out
+}
+
+func runNetworkActions(actions []networkActionConfig) error {
+	var errs []string
+	for _, action := range actions {
+		switch action.Type {
+		case networkActionDisconnect:
+			if err := disconnectWindowsNetwork(); err != nil {
+				errs = append(errs, fmt.Sprintf("disconnect: %v", err))
+			}
+		case networkActionPowerShell:
+			if err := runPowerShellScript(action.Script); err != nil {
+				errs = append(errs, fmt.Sprintf("powershell: %v", err))
+			} else {
+				logMsg("network action powershell executed")
+			}
+		default:
+			errs = append(errs, fmt.Sprintf("unsupported action %q", action.Type))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 func disconnectWindowsNetwork() error {
 	ps := `Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Disable-NetAdapter -Confirm:$false`
-	if err := runHiddenCommand("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", ps); err == nil {
+	if err := runPowerShellScript(ps); err == nil {
 		logMsg("network disconnected via Disable-NetAdapter")
 		return nil
 	} else {
@@ -768,8 +837,19 @@ func disconnectWindowsNetwork() error {
 	return nil
 }
 
+func runPowerShellScript(script string) error {
+	return runHiddenCommand("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", script)
+}
+
 func runHiddenCommand(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), networkActionTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	return cmd.Run()
+	err := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("%s timed out after %s", name, networkActionTimeout)
+	}
+	return err
 }
