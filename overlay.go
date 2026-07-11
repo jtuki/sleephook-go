@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math/rand"
 	"syscall"
 	"time"
@@ -502,6 +503,27 @@ func confirmScheduledDisconnect(timeout time.Duration) bool {
 	)
 	if ret == 0 {
 		logMsg("scheduled network action prompt failed or timed out without result: %v", err)
+		return true
+	}
+	return ret != IDNO
+}
+
+func confirmNetworkAction(timeout time.Duration, location string) bool {
+	text := fmt.Sprintf("检测到当前公网 IP 不在允许列表。\n\n当前位置：%s\n\n选择“是”：立即执行配置的网络处置动作，并在接下来的 30 分钟内不再重复询问。\n选择“否”：取消本次处置，并暂停网络检查 3 分钟。\n\n%d 秒无操作将自动执行，并在 30 分钟内不再重复询问。",
+		location, int(timeout/time.Second))
+	t, _ := syscall.UTF16PtrFromString(text)
+	title, _ := syscall.UTF16PtrFromString("SleepHook 网络处置确认")
+	flags := uintptr(MB_YESNO | MB_ICONWARNING | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST)
+	ret, _, err := pMessageBoxTimeoutW.Call(
+		0,
+		uintptr(unsafe.Pointer(t)),
+		uintptr(unsafe.Pointer(title)),
+		flags,
+		0,
+		uintptr(timeout/time.Millisecond),
+	)
+	if ret == 0 {
+		logMsg("network action prompt failed or timed out without result: %v", err)
 		return true
 	}
 	return ret != IDNO

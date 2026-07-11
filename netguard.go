@@ -16,40 +16,45 @@ import (
 )
 
 const (
-	localIPScanInterval     = 200 * time.Millisecond
-	localIPLogInterval      = 5 * time.Minute
-	forceDisconnectDuration = 120 * time.Minute
-	forcePromptTimeout      = 30 * time.Second
-	networkRecheckDelay     = 3 * time.Second
-	networkCheckTimeout     = 8 * time.Second
-	networkActionTimeout    = 30 * time.Second
-	disconnectRetryCooldown = 15 * time.Second
+	localIPScanInterval        = 200 * time.Millisecond
+	localIPLogInterval         = 5 * time.Minute
+	forceDisconnectDuration    = 120 * time.Minute
+	forcePromptTimeout         = 30 * time.Second
+	networkActionPromptTimeout = 3 * time.Second
+	networkActionConfirmCache  = 30 * time.Minute
+	networkActionDismissSkip   = 3 * time.Minute
+	networkRecheckDelay        = 3 * time.Second
+	networkCheckTimeout        = 8 * time.Second
+	networkActionTimeout       = 30 * time.Second
+	disconnectRetryCooldown    = 15 * time.Second
 )
 
 type networkGuard struct {
-	mu               sync.Mutex
-	enabled          bool
-	allowedCountries []string
-	providers        []string
-	actions          []networkActionConfig
-	forceTimes       []int
-	providerCursor   int
-	nextCheck        time.Time
-	checking         bool
-	skipUntil        time.Time
-	forceUntil       time.Time
-	forcePrompting   bool
-	nextForceAttempt time.Time
-	lastForceSlot    string
-	lastInfo         string
-	lastIP           string
-	lastLocalScan    time.Time
-	lastLocalLog     time.Time
-	lastLocalIPs     string
-	localIPsKnown    bool
-	forceDisconnect  bool
-	lastDisconnect   time.Time
-	actionRunning    bool
+	mu                 sync.Mutex
+	enabled            bool
+	allowedCountries   []string
+	providers          []string
+	actions            []networkActionConfig
+	forceTimes         []int
+	providerCursor     int
+	nextCheck          time.Time
+	checking           bool
+	skipUntil          time.Time
+	forceUntil         time.Time
+	forcePrompting     bool
+	actionPrompting    bool
+	actionConfirmUntil time.Time
+	nextForceAttempt   time.Time
+	lastForceSlot      string
+	lastInfo           string
+	lastIP             string
+	lastLocalScan      time.Time
+	lastLocalLog       time.Time
+	lastLocalIPs       string
+	localIPsKnown      bool
+	forceDisconnect    bool
+	lastDisconnect     time.Time
+	actionRunning      bool
 }
 
 type publicIPLocation struct {
@@ -106,6 +111,7 @@ func (g *networkGuard) configure(cfg networkCheckConfig) {
 	if changed {
 		g.nextCheck = time.Time{}
 		g.providerCursor = 0
+		g.actionConfirmUntil = time.Time{}
 	}
 	g.mu.Unlock()
 }
@@ -199,7 +205,7 @@ func (g *networkGuard) tick(now time.Time) {
 		g.mu.Unlock()
 		return
 	}
-	if g.forcePrompting {
+	if g.forcePrompting || g.actionPrompting {
 		g.mu.Unlock()
 		return
 	}
@@ -392,8 +398,11 @@ func (g *networkGuard) runCheck() {
 	g.nextCheck = time.Now().Add(networkRecheckDelay)
 	skipActive := g.skipUntil.After(time.Now())
 	forceDisconnect := g.forceDisconnect
+	confirmCacheCleared := false
 	if ok {
 		g.forceDisconnect = false
+		confirmCacheCleared = !g.actionConfirmUntil.IsZero()
+		g.actionConfirmUntil = time.Time{}
 	}
 	g.mu.Unlock()
 
@@ -403,6 +412,9 @@ func (g *networkGuard) runCheck() {
 		logMsg("network check initial IP: allowed=%v allowed_countries=%v providers=%v location=%s", ok, allowed, endpointIDs(endpoints), info)
 	} else if ipChanged {
 		logMsg("network check public IP changed: %s -> %s, allowed=%v allowed_countries=%v providers=%v location=%s", prevIP, loc.IP, ok, allowed, endpointIDs(endpoints), info)
+	}
+	if confirmCacheCleared {
+		logMsg("network action confirmation cache cleared because public IP is allowed")
 	}
 
 	if !ok {
@@ -419,14 +431,63 @@ func (g *networkGuard) runCheck() {
 			logMsg("network check could not verify public IP; keeping network connected (%v)", err)
 			return
 		} else if ipChanged {
-			logMsg("network check detected changed disallowed public IP; running configured actions")
+			logMsg("network check detected changed disallowed public IP; handling configured actions")
 		} else {
-			logMsg("network check detected disallowed public IP; running configured actions (location=%s)", info)
+			logMsg("network check detected disallowed public IP; handling configured actions (location=%s)", info)
+		}
+		if !g.confirmNetworkTriggeredAction(info) {
+			return
 		}
 		if err := g.runConfiguredNetworkActions(ipChanged || forceDisconnect); err != nil {
 			logMsg("network action failed: %v", err)
 		}
 	}
+}
+
+func (g *networkGuard) confirmNetworkTriggeredAction(info string) bool {
+	g.mu.Lock()
+	now := time.Now()
+	if !g.enabled || g.skipUntil.After(now) {
+		g.mu.Unlock()
+		return false
+	}
+	if g.actionConfirmUntil.After(now) {
+		until := g.actionConfirmUntil
+		g.mu.Unlock()
+		logMsg("network action confirmation cache active; skipping prompt until %s", until.Format("15:04:05"))
+		return true
+	}
+	if g.actionPrompting {
+		g.mu.Unlock()
+		return false
+	}
+	g.actionPrompting = true
+	g.mu.Unlock()
+
+	confirmed := confirmNetworkAction(networkActionPromptTimeout, info)
+	now = time.Now()
+
+	g.mu.Lock()
+	g.actionPrompting = false
+	if !g.enabled || g.skipUntil.After(now) {
+		g.mu.Unlock()
+		return false
+	}
+	if !confirmed {
+		until := now.Add(networkActionDismissSkip)
+		g.skipUntil = until
+		g.nextCheck = until
+		g.forceDisconnect = false
+		g.mu.Unlock()
+		logMsg("network action dismissed; skipping network checks until %s", until.Format("15:04:05"))
+		updateTooltip()
+		return false
+	}
+	until := now.Add(networkActionConfirmCache)
+	g.actionConfirmUntil = until
+	g.mu.Unlock()
+	logMsg("network action confirmed; suppressing prompts until %s", until.Format("15:04:05"))
+	return true
 }
 
 func (g *networkGuard) snapshot() (bool, []string, []locationEndpoint) {
